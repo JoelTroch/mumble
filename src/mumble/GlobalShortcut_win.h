@@ -34,6 +34,14 @@
 #include "GlobalShortcut.h"
 #include "Timer.h"
 
+#ifdef USE_GKEY
+#include "GKey.h"
+#endif
+
+#ifdef USE_XBOXINPUT
+#include "XboxInput.h"
+#endif
+
 #define DIRECTINPUT_VERSION 0x0800
 #include <dinput.h>
 
@@ -41,9 +49,17 @@ typedef QPair<GUID, DWORD> qpButton;
 
 struct InputDevice {
 	LPDIRECTINPUTDEVICE8 pDID;
+
+	QString name;
+
 	GUID guid;
 	QVariant vguid;
-	QString name;
+
+	GUID guidproduct;
+	QVariant vguidproduct;
+
+	uint16_t vendor_id;
+	uint16_t product_id;
 
 	// dwType to name
 	QHash<DWORD, QString> qhNames;
@@ -70,6 +86,18 @@ class GlobalShortcutWin : public GlobalShortcutEngine {
 		unsigned int uiHardwareDevices;
 		Timer tDoubleClick;
 		bool bHook;
+#ifdef USE_GKEY
+		GKeyLibrary *gkey;
+#endif
+#ifdef USE_XBOXINPUT
+		/// xboxinputLastPacket holds the last packet number
+		/// that was processed. Any new data queried for a
+		/// device is only valid if the packet number is
+		/// different than last time we queried it.
+		uint32_t   xboxinputLastPacket[XBOXINPUT_MAX_DEVICES];
+		XboxInput *xboxinput;
+#endif
+
 		static BOOL CALLBACK EnumSuitableDevicesCB(LPCDIDEVICEINSTANCE, LPDIRECTINPUTDEVICE8, DWORD, DWORD, LPVOID);
 		static BOOL CALLBACK EnumDevicesCB(LPCDIDEVICEINSTANCE, LPVOID);
 		static BOOL CALLBACK EnumDeviceObjectsCallback(LPCDIDEVICEOBJECTINSTANCE lpddoi, LPVOID pvRef);

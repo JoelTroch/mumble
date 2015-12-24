@@ -39,6 +39,7 @@
 
 #include "Connection.h"
 #include "Message.h"
+#include "SSL.h"
 #include "Mumble.pb.h"
 
 
@@ -90,17 +91,17 @@ void Connection::setToS() {
 		qWarning("Connection: Failed to add flow to QOS");
 #elif defined(Q_OS_UNIX)
 	int val = 0xa0;
-	if (setsockopt(qtsSocket->socketDescriptor(), IPPROTO_IP, IP_TOS, &val, sizeof(val))) {
+	if (setsockopt(static_cast<int>(qtsSocket->socketDescriptor()), IPPROTO_IP, IP_TOS, &val, sizeof(val))) {
 		val = 0x60;
-		if (setsockopt(qtsSocket->socketDescriptor(), IPPROTO_IP, IP_TOS, &val, sizeof(val)))
+		if (setsockopt(static_cast<int>(qtsSocket->socketDescriptor()), IPPROTO_IP, IP_TOS, &val, sizeof(val)))
 			qWarning("Connection: Failed to set TOS for TCP Socket");
 	}
 #if defined(SO_PRIORITY)
 	socklen_t optlen = sizeof(val);
-	if (getsockopt(qtsSocket->socketDescriptor(), SOL_SOCKET, SO_PRIORITY, &val, &optlen) == 0) {
+	if (getsockopt(static_cast<int>(qtsSocket->socketDescriptor()), SOL_SOCKET, SO_PRIORITY, &val, &optlen) == 0) {
 		if (val == 0) {
 			val = 6;
-			setsockopt(qtsSocket->socketDescriptor(), SOL_SOCKET, SO_PRIORITY, &val, sizeof(val));
+			setsockopt(static_cast<int>(qtsSocket->socketDescriptor()), SOL_SOCKET, SO_PRIORITY, &val, sizeof(val));
 		}
 	}
 #endif
@@ -108,7 +109,7 @@ void Connection::setToS() {
 #endif
 }
 
-int Connection::activityTime() const {
+qint64 Connection::activityTime() const {
 	return qtLastPacket.elapsed();
 }
 
@@ -181,7 +182,7 @@ void Connection::messageToNetwork(const ::google::protobuf::Message &msg, unsign
 		return;
 	cache.resize(len + 6);
 	unsigned char *uc = reinterpret_cast<unsigned char *>(cache.data());
-	qToBigEndian<quint16>(msgType, & uc[0]);
+	qToBigEndian<quint16>(static_cast<quint16>(msgType), & uc[0]);
 	qToBigEndian<quint32>(len, & uc[2]);
 
 	msg.SerializeToArray(uc + 6, len);
@@ -212,9 +213,9 @@ void Connection::forceFlush() {
 	qtsSocket->flush();
 
 	nodelay = 1;
-	setsockopt(qtsSocket->socketDescriptor(), IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char *>(&nodelay), sizeof(nodelay));
+	setsockopt(static_cast<int>(qtsSocket->socketDescriptor()), IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char *>(&nodelay), static_cast<socklen_t>(sizeof(nodelay)));
 	nodelay = 0;
-	setsockopt(qtsSocket->socketDescriptor(), IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char *>(&nodelay), sizeof(nodelay));
+	setsockopt(static_cast<int>(qtsSocket->socketDescriptor()), IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<char *>(&nodelay), static_cast<socklen_t>(sizeof(nodelay)));
 }
 
 void Connection::disconnectSocket(bool force) {
@@ -247,6 +248,22 @@ QList<QSslCertificate> Connection::peerCertificateChain() const {
 
 QSslCipher Connection::sessionCipher() const {
 	return qtsSocket->sessionCipher();
+}
+
+QSsl::SslProtocol Connection::sessionProtocol() const {
+#if QT_VERSION >= 0x050400
+	return qtsSocket->sessionProtocol();
+#else
+	return QSsl::UnknownProtocol; // Cannot determine session cipher. We only know it's some TLS variant
+#endif
+}
+
+QString Connection::sessionProtocolString() const {
+#if QT_VERSION >= 0x050400
+	return MumbleSSL::protocolToString(sessionProtocol());
+#else
+	return QLatin1String("TLS"); // Cannot determine session cipher. We only know it's some TLS variant
+#endif
 }
 
 #ifdef Q_OS_WIN

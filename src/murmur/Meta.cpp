@@ -38,6 +38,11 @@
 #include "Server.h"
 #include "OSInfo.h"
 #include "Version.h"
+#include "SSL.h"
+
+#if defined(USE_QSSLDIFFIEHELLMANPARAMETERS)
+# include <QSslDiffieHellmanParameters>
+#endif
 
 MetaParams Meta::mp;
 
@@ -54,12 +59,16 @@ MetaParams::MetaParams() {
 	iMaxUsersPerChannel = 0;
 	iMaxTextMessageLength = 5000;
 	iMaxImageMessageLength = 131072;
+#if OPENSSL_VERSION_NUMBER <= 0x00090900fL
+	legacyPasswordHash = true;
+#else
 	legacyPasswordHash = false;
+#endif
 	kdfIterations = -1;
 	bAllowHTML = true;
 	iDefaultChan = 0;
 	bRememberChan = true;
-	qsWelcomeText = QString("Welcome to this server");
+	qsWelcomeText = QString();
 	qsDatabase = QString();
 	iDBPort = 0;
 	qsDBusService = "net.sourceforge.mumble.murmur";
@@ -89,6 +98,8 @@ MetaParams::MetaParams() {
 
 	qrUserName = QRegExp(QLatin1String("[-=\\w\\[\\]\\{\\}\\(\\)\\@\\|\\.]+"));
 	qrChannelName = QRegExp(QLatin1String("[ \\-=\\w\\#\\[\\]\\{\\}\\(\\)\\@\\|]+"));
+
+	qsCiphers = MumbleSSL::defaultOpenSSLCipherString();
 
 	qsSettings = NULL;
 }
@@ -238,25 +249,36 @@ void MetaParams::read(QString fname) {
 			}
 		}
 
+#if QT_VERSION >= 0x050000
+		if (hasipv6) {
+			if (SslServer::hasDualStackSupport() && hasipv4) {
+				qlBind << QHostAddress(QHostAddress::Any);
+				hasipv4 = false; // No need to add a separate ipv4 socket
+			} else {
+				qlBind << QHostAddress(QHostAddress::AnyIPv6);
+			}
+		}
+
+		if (hasipv4) {
+			qlBind << QHostAddress(QHostAddress::AnyIPv4);
+		}
+#else // QT_VERSION < 0x050000
+		// For Qt 4 AnyIPv6 resulted in a dual stack socket on dual stack
+		// capable systems while Any resulted in an IPv4 only socket. For
+		// Qt 5 this has been reworked so that AnyIPv6/v4 are now exclusive
+		// IPv6/4 sockets while Any is the dual stack socket.
+
 		if (hasipv6) {
 			qlBind << QHostAddress(QHostAddress::AnyIPv6);
-#ifdef Q_OS_UNIX
-			if (hasipv4) {
-				int s = ::socket(AF_INET6, SOCK_STREAM, 0);
-				if (s != -1) {
-					int ipv6only = 0;
-					socklen_t optlen = sizeof(ipv6only);
-					if (getsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6only, &optlen) == 0) {
-						if (ipv6only == 0)
-							hasipv4 = false;
-					}
-					close(s);
-				}
+			if (SslServer::hasDualStackSupport() && hasipv4) {
+				hasipv4 = false; // No need to add a separate ipv4 socket
 			}
-#endif
 		}
-		if (hasipv4)
+
+		if (hasipv4) {
 			qlBind << QHostAddress(QHostAddress::Any);
+		}
+#endif
 	}
 
 	qsPassword = typeCheckedFromSettings("serverpassword", qsPassword);
@@ -264,7 +286,11 @@ void MetaParams::read(QString fname) {
 	iTimeout = typeCheckedFromSettings("timeout", iTimeout);
 	iMaxTextMessageLength = typeCheckedFromSettings("textmessagelength", iMaxTextMessageLength);
 	iMaxImageMessageLength = typeCheckedFromSettings("imagemessagelength", iMaxImageMessageLength);
+#if OPENSSL_VERSION_NUMBER <= 0x00090900fL
+	legacyPasswordHash = true;
+#else
 	legacyPasswordHash = typeCheckedFromSettings("legacypasswordhash", legacyPasswordHash);
+#endif
 	kdfIterations = typeCheckedFromSettings("kdfiterations", -1);
 	bAllowHTML = typeCheckedFromSettings("allowhtml", bAllowHTML);
 	iMaxBandwidth = typeCheckedFromSettings("bandwidth", iMaxBandwidth);
@@ -358,9 +384,12 @@ void MetaParams::read(QString fname) {
 	bSendVersion = typeCheckedFromSettings("sendversion", bSendVersion);
 	bAllowPing = typeCheckedFromSettings("allowping", bAllowPing);
 
+	qsCiphers = typeCheckedFromSettings("sslCiphers", qsCiphers);
+
 	QString qsSSLCert = qsSettings->value("sslCert").toString();
 	QString qsSSLKey = qsSettings->value("sslKey").toString();
 	QString qsSSLCA = qsSettings->value("sslCA").toString();
+	QString qsSSLDHParams = qsSettings->value("sslDHParams").toString();
 
 	qbaPassPhrase = qsSettings->value("sslPassPhrase").toByteArray();
 
@@ -380,7 +409,7 @@ void MetaParams::read(QString fname) {
 		}
 	}
 
-	QByteArray crt, key;
+	QByteArray crt, key, dhparams;
 
 	if (! qsSSLCert.isEmpty()) {
 		QFile pem(qsSSLCert);
@@ -436,21 +465,76 @@ void MetaParams::read(QString fname) {
 		}
 	}
 
+#if defined(USE_QSSLDIFFIEHELLMANPARAMETERS)
+	if (! qsSSLDHParams.isEmpty()) {
+		QFile pem(qsSSLDHParams);
+		if (pem.open(QIODevice::ReadOnly)) {
+			dhparams = pem.readAll();
+			pem.close();
+		} else {
+			qCritical("Failed to read %s", qPrintable(qsSSLDHParams));
+		}
+	}
+
+	if (! dhparams.isEmpty()) {
+		QSslDiffieHellmanParameters qdhp = QSslDiffieHellmanParameters(dhparams);
+		if (qdhp.isValid()) {
+			qbaDHParams = dhparams;
+		} else {
+			qFatal("Unable to use specified Diffie-Hellman parameters: %s", qPrintable(qdhp.errorString()));
+		}
+	}
+#else
+	if (! qsSSLDHParams.isEmpty()) {
+		qFatal("This version of Murmur does not support Diffie-Hellman parameters (sslDHParams). Murmur will not start unless you remove the option from your murmur.ini file.");
+	}
+#endif
+
 	if (! QSslSocket::supportsSsl()) {
 		qFatal("Qt without SSL Support");
 	}
 
-	QList<QSslCipher> pref;
-	foreach(QSslCipher c, QSslSocket::defaultCiphers()) {
-		if (c.usedBits() < 128)
-			continue;
-		pref << c;
+	{
+		QList<QSslCipher> ciphers = MumbleSSL::ciphersFromOpenSSLCipherString(qsCiphers);
+		if (ciphers.isEmpty()) {
+			qFatal("Invalid sslCiphers option. Either the cipher string is invalid or none of the ciphers are available: \"%s\"", qPrintable(qsCiphers));
+		}
+
+		// If the version of Qt we're building against doesn't support
+		// QSslDiffieHellmanParameters, then we must filter out Diffie-
+		// Hellman cipher suites in order to guarantee that we do not
+		// use Qt's default Diffie-Hellman parameters.
+		QList<QSslCipher> filtered;
+#if !defined(USE_QSSLDIFFIEHELLMANPARAMETERS)
+		foreach (QSslCipher c, ciphers) {
+			if (c.keyExchangeMethod() == QLatin1String("DH")) {
+				continue;
+			}
+			filtered << c;
+		}
+		if (ciphers.size() != filtered.size()) {
+			qWarning("Warning: all cipher suites in sslCiphers using Diffie-Hellman key exchange "
+			         "have been removed. Qt %s does not support custom Diffie-Hellman parameters.",
+				 qVersion());
+		}
+#else
+		filtered = ciphers;
+#endif
+
+		QSslSocket::setDefaultCiphers(filtered);
+
+		QStringList pref;
+		foreach (QSslCipher c, filtered) {
+			pref << c.name();
+		}
+		qWarning("Meta: TLS cipher preference is \"%s\"", qPrintable(pref.join(QLatin1String(":"))));
 	}
-	if (pref.isEmpty())
-		qFatal("No SSL ciphers of at least 128 bit found");
-	QSslSocket::setDefaultCiphers(pref);
 
 	qWarning("OpenSSL: %s", SSLeay_version(SSLEAY_VERSION));
+
+#if OPENSSL_VERSION_NUMBER <= 0x00090900fL
+	qWarning("Meta: PBKDF2 support is disabled. Using legacy password hashing.");
+#endif
 
 	qmConfig.clear();
 	QStringList hosts;
@@ -488,6 +572,8 @@ void MetaParams::read(QString fname) {
 	qmConfig.insert(QLatin1String("suggestpushtotalk"), qvSuggestPushToTalk.isNull() ? QString() : qvSuggestPushToTalk.toString());
 	qmConfig.insert(QLatin1String("opusthreshold"), QString::number(iOpusThreshold));
 	qmConfig.insert(QLatin1String("channelnestinglimit"), QString::number(iChannelNestingLimit));
+	qmConfig.insert(QLatin1String("sslCiphers"), qsCiphers);
+	qmConfig.insert(QLatin1String("sslDHParams"), QString::fromLatin1(qbaDHParams.constData()));
 }
 
 Meta::Meta() {
@@ -567,7 +653,7 @@ bool Meta::boot(int srvnum) {
 			}
 		}
 		if (r.rlim_cur < sockets)
-			qCritical("Current booted servers require minimum %d file descriptors when all slots are full, but only %ld file descriptors are allowed for this process. Your server will crash and burn; read the FAQ for details.", sockets, r.rlim_cur);
+			qCritical("Current booted servers require minimum %d file descriptors when all slots are full, but only %lu file descriptors are allowed for this process. Your server will crash and burn; read the FAQ for details.", sockets, static_cast<unsigned long>(r.rlim_cur));
 	}
 #endif
 

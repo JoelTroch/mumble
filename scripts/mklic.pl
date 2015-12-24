@@ -53,8 +53,8 @@ print $F "	const char* url;\n";
 print $F "	const char* license;\n";
 print $F "\n";
 print $F "	ThirdPartyLicense() : name(0), url(0), license(0) {}\n";
-print $F "	ThirdPartyLicense(const char* name, const char* url, const char* license)\n";
-print $F "	    : name(name), url(url), license(license) {}\n";
+print $F "	ThirdPartyLicense(const char* name_, const char* url_, const char* license_)\n";
+print $F "	    : name(name_), url(url_), license(license_) {}\n";
 print $F "	bool isEmpty() const { return (name == 0 && url == 0 && license == 0); }\n";
 print $F "};\n";
 print $F "\n";
@@ -78,6 +78,7 @@ my @thirdPartyLicenses = (
     ["licenseQtTranslations", "../src/mumble/qttranslations/LICENSE",
         "Additional Qt translations", "https://www.virtualbox.org/ticket/2018", "USING_BUNDLED_QT_TRANSLATIONS"],
     ["licenseFilterSvg", "../icons/filter.txt", "filter.svg icon", "https://commons.wikimedia.org/wiki/File:Filter.svg"],
+    ["licenseEmojiOne", "../3rdPartyLicenses/cc_by_sa_40_legalcode.txt", "Emoji One artwork", "http://emojione.com/"]
 );
 
 # Print 3rd party licenses

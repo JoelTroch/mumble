@@ -33,6 +33,8 @@
 
 #include "G15LCDEngine_helper.h"
 
+#include "MumbleApplication.h"
+
 static LCDEngine *G15LCDEngineNew() {
 	return new G15LCDEngineHelper();
 }
@@ -44,9 +46,9 @@ G15LCDEngineHelper::G15LCDEngineHelper() : LCDEngine() {
 	bUnavailable = true;
 
 #if defined(Q_OS_WIN)
-	qsHelperExecutable = QString::fromLatin1("\"%1/mumble-g15-helper.exe\"").arg(qApp->applicationDirPath());
+	qsHelperExecutable = QString::fromLatin1("\"%1/mumble-g15-helper.exe\"").arg(MumbleApplication::instance()->applicationVersionRootPath());
 #elif defined(Q_OS_MAC)
-	qsHelperExecutable = QString::fromLatin1("%1/mumble-g15-helper").arg(qApp->applicationDirPath());
+	qsHelperExecutable = QString::fromLatin1("\"%1/mumble-g15-helper\"").arg(MumbleApplication::instance()->applicationVersionRootPath());
 #endif
 
 	qpHelper = new QProcess(this);
@@ -115,7 +117,7 @@ bool G15LCDEngineHelper::framebufferReady() const {
 	return !bUnavailable && (qpHelper->state() == QProcess::Running);
 }
 
-void G15LCDEngineHelper::submitFrame(bool alert, unsigned char *buf, size_t len) {
+void G15LCDEngineHelper::submitFrame(bool alert, unsigned char *buf, qint64 len) {
 	char pri = alert ? 1 : 0;
 	if ((qpHelper->write(&pri, 1) != 1) || (qpHelper->write(reinterpret_cast<char *>(buf), len) != len))
 		qWarning("G15LCDEngine_lglcd: failed to write");

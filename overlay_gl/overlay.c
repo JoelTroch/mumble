@@ -52,6 +52,7 @@
 #include <math.h>
 #include <errno.h>
 #include <time.h>
+#include <limits.h>
 
 #if defined(TARGET_UNIX)
 # define GLX_GLXEXT_LEGACY
@@ -73,6 +74,8 @@ typedef unsigned char bool;
 # include <AGL/AGL.h>
 #
 # include <objc/objc-runtime.h>
+#
+# include "mach_override.h"
 #
 # include "avail_mac.h"
 #endif
@@ -108,7 +111,7 @@ typedef struct _Context {
 	unsigned int uiMappedLength;
 
 	bool bValid;
-	bool bGlx;
+	bool bMesa;
 
 	GLuint uiProgram;
 
@@ -180,7 +183,13 @@ static void newContext(Context * ctx) {
 		}
 	}
 
-	if (home) {
+	char *xdgRuntimeDir = getenv("XDG_RUNTIME_DIR");
+
+	if (xdgRuntimeDir != NULL) {
+		ctx->saName.sun_family = PF_UNIX;
+		strcpy(ctx->saName.sun_path, xdgRuntimeDir);
+		strcat(ctx->saName.sun_path, "/MumbleOverlayPipe");
+	} else if (home) {
 		ctx->saName.sun_family = PF_UNIX;
 		strcpy(ctx->saName.sun_path, home);
 		strcat(ctx->saName.sun_path, "/.MumbleOverlayPipe");
@@ -260,7 +269,7 @@ static void regenTexture(Context *ctx) {
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ctx->uiWidth, ctx->uiHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, ctx->a_ucTexture);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)ctx->uiWidth, (GLsizei)ctx->uiHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, ctx->a_ucTexture);
 }
 
 static void drawOverlay(Context *ctx, unsigned int width, unsigned int height) {
@@ -287,7 +296,7 @@ static void drawOverlay(Context *ctx, unsigned int width, unsigned int height) {
 		om.omh.uiMagic = OVERLAY_MAGIC_NUMBER;
 		om.omh.uiType = OVERLAY_MSGTYPE_PID;
 		om.omh.iLength = sizeof(struct OverlayMsgPid);
-		om.omp.pid = getpid();
+		om.omp.pid = (unsigned int)getpid(); // getpid can't fail
 
 		if (!sendMessage(ctx, &om))
 			return;
@@ -316,7 +325,7 @@ static void drawOverlay(Context *ctx, unsigned int width, unsigned int height) {
 
 	// receive and process overlay messages
 	while (1) {
-		if (ctx->omMsg.omh.iLength == -1) {
+		if (ctx->omMsg.omh.iLength < 0) {
 			// receive the overlay message header
 			ssize_t length = recv(ctx->iSocket, ctx->omMsg.headerbuffer, sizeof(struct OverlayMsgHeader), 0);
 			if (length < 0) {
@@ -331,14 +340,14 @@ static void drawOverlay(Context *ctx, unsigned int width, unsigned int height) {
 			}
 		} else {
 			// receive the overlay message body
-			ssize_t  length = recv(ctx->iSocket, ctx->omMsg.msgbuffer, ctx->omMsg.omh.iLength, 0);
+			ssize_t length = recv(ctx->iSocket, ctx->omMsg.msgbuffer, (size_t)ctx->omMsg.omh.iLength, 0);
 			if (length < 0) {
 				if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
 					break;
 				disconnect(ctx);
 				return;
 			} else if (length != ctx->omMsg.omh.iLength) {
-				ods("Short overlay message read %x %ld/%d", ctx->omMsg.omh.uiType, length, ctx->omMsg.omh.iLength);
+				ods("Short overlay message read %x %zd/%d", ctx->omMsg.omh.uiType, length, ctx->omMsg.omh.iLength);
 				disconnect(ctx);
 				return;
 			}
@@ -354,26 +363,32 @@ static void drawOverlay(Context *ctx, unsigned int width, unsigned int height) {
 						int fd = shm_open(oms->a_cName, O_RDONLY, 0600);
 						if (fd != -1) {
 							struct stat buf;
-							fstat(fd, &buf);
-							if (buf.st_size >= ctx->uiWidth * ctx->uiHeight * 4) {
-								ctx->uiMappedLength = buf.st_size;
-								ctx->a_ucTexture = mmap(NULL, buf.st_size, PROT_READ, MAP_SHARED, fd, 0);
-								if (ctx->a_ucTexture != MAP_FAILED) {
-									// mmap successfull; send a new bodyless sharedmemory overlay message and regenerate the overlay texture
-									struct OverlayMsg om;
-									om.omh.uiMagic = OVERLAY_MAGIC_NUMBER;
-									om.omh.uiType = OVERLAY_MSGTYPE_SHMEM;
-									om.omh.iLength = 0;
-
-									if (! sendMessage(ctx, &om))
-										return;
-
-									regenTexture(ctx);
-									continue;
+							
+							if (fstat(fd, &buf) != -1) {
+								unsigned int buflen = buf.st_size;
+								if (buflen >= ctx->uiWidth * ctx->uiHeight * 4
+								        && buflen < 512 * 1024 * 1024) {
+									ctx->uiMappedLength = buflen;
+									ctx->a_ucTexture = mmap(NULL, (size_t)buflen, PROT_READ, MAP_SHARED, fd, 0);
+									if (ctx->a_ucTexture != MAP_FAILED) {
+										// mmap successfull; send a new bodyless sharedmemory overlay message and regenerate the overlay texture
+										struct OverlayMsg om;
+										om.omh.uiMagic = OVERLAY_MAGIC_NUMBER;
+										om.omh.uiType = OVERLAY_MSGTYPE_SHMEM;
+										om.omh.iLength = 0;
+	
+										if (! sendMessage(ctx, &om))
+											return;
+	
+										regenTexture(ctx);
+										continue;
+									}
+									ctx->a_ucTexture = NULL;
 								}
-								ctx->a_ucTexture = NULL;
+								ctx->uiMappedLength = 0;
+							} else {
+								ods("Failed to fstat memory map");
 							}
-							ctx->uiMappedLength = 0;
 							close(fd);
 						}
 						ods("Failed to map memory");
@@ -388,7 +403,7 @@ static void drawOverlay(Context *ctx, unsigned int width, unsigned int height) {
 
 							if ((omb->x == 0) && (omb->y == 0) && (omb->w == ctx->uiWidth) && (omb->h == ctx->uiHeight)) {
 								ods("Optimzied fullscreen blit");
-								glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ctx->uiWidth, ctx->uiHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, ctx->a_ucTexture);
+								glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)ctx->uiWidth, (GLsizei)ctx->uiHeight, 0, GL_BGRA, GL_UNSIGNED_BYTE, ctx->a_ucTexture);
 							} else {
 								// allocate temporary memory
 								unsigned int x = omb->x;
@@ -407,7 +422,7 @@ static void drawOverlay(Context *ctx, unsigned int width, unsigned int height) {
 								}
 
 								// copy temporary texture to opengl
-								glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, w, h, GL_BGRA, GL_UNSIGNED_BYTE, ptr);
+								glTexSubImage2D(GL_TEXTURE_2D, 0, (GLint)x, (GLint)y, (GLint)w, (GLint)h, GL_BGRA, GL_UNSIGNED_BYTE, ptr);
 								free(ptr);
 							}
 						}
@@ -502,7 +517,7 @@ static void drawContext(Context * ctx, int width, int height) {
 		om.omh.uiMagic = OVERLAY_MAGIC_NUMBER;
 		om.omh.uiType = OVERLAY_MSGTYPE_FPS;
 		om.omh.iLength = sizeof(struct OverlayMsgFps);
-		om.omf.fps = ctx->frameCount / elapsed;
+		om.omf.fps = (float)ctx->frameCount / elapsed;
 
 		sendMessage(ctx, &om);
 
@@ -510,14 +525,14 @@ static void drawContext(Context * ctx, int width, int height) {
 		ctx->timeT = t;
 	}
 
-	GLint program;
+	GLuint program;
 	GLint viewport[4];
 	int i;
 
 	glPushAttrib(GL_ALL_ATTRIB_BITS);
 	glPushClientAttrib(GL_ALL_ATTRIB_BITS);
 	glGetIntegerv(GL_VIEWPORT, viewport);
-	glGetIntegerv(GL_CURRENT_PROGRAM, &program);
+	glGetIntegerv(GL_CURRENT_PROGRAM, (GLint *)&program);
 
 	glViewport(0, 0, width, height);
 
@@ -592,7 +607,7 @@ static void drawContext(Context * ctx, int width, int height) {
 	glGetIntegerv(GL_MAX_TEXTURE_UNITS, &texunits);
 
 	for (i=texunits-1;i>=0;--i) {
-		glActiveTexture(GL_TEXTURE0 + i);
+		glActiveTexture(GL_TEXTURE0 + (GLenum)i);
 		glDisable(GL_TEXTURE_1D);
 		glDisable(GL_TEXTURE_2D);
 		glDisable(GL_TEXTURE_3D);
@@ -629,9 +644,9 @@ static void drawContext(Context * ctx, int width, int height) {
 	glEnableClientState(GL_VERTEX_ARRAY);
 	glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 
-	GLint bound = 0, vbobound = 0;
-	glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, &bound);
-	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &vbobound);
+	GLuint bound = 0, vbobound = 0;
+	glGetIntegerv(GL_PIXEL_UNPACK_BUFFER_BINDING, (GLint *)&bound);
+	glGetIntegerv(GL_ARRAY_BUFFER_BINDING, (GLint *)&vbobound);
 
 	if (bound != 0) {
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
@@ -640,7 +655,7 @@ static void drawContext(Context * ctx, int width, int height) {
 		glBindBuffer(GL_ARRAY_BUFFER, 0);
 	}
 
-	drawOverlay(ctx, width, height);
+	drawOverlay(ctx, (unsigned int)width, (unsigned int)height);
 
 	if (bound != 0) {
 		glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, bound);

@@ -117,7 +117,13 @@ class MainWindow : public QMainWindow, public MessageHandler, public Ui::MainWin
 		QString qsDesiredChannel;
 
 		bool bSuppressAskOnQuit;
+		/// Restart the client after shutdown
+		bool restartOnQuit;
 		bool bAutoUnmute;
+
+		/// Contains the cursor whose position is immediately before the image to
+		/// save when activating the "Save Image As..." context menu item.
+		QTextCursor qtcSaveImageCursor;
 
 #if QT_VERSION >= 0x050000
 		QPointer<Channel> cContextChannel;
@@ -136,10 +142,10 @@ class MainWindow : public QMainWindow, public MessageHandler, public Ui::MainWin
 		void updateTrayIcon();
 		void updateTransmitModeComboBox();
 		QPair<QByteArray, QImage> openImageFile();
-		static const QString defaultStyleSheet;
-
+		
 		void updateChatBar();
 		void openTextMessageDialog(ClientUser *p);
+		void openUserLocalVolumeDialog(ClientUser *p);
 
 #ifdef Q_OS_WIN
 #if QT_VERSION >= 0x050000
@@ -172,13 +178,14 @@ class MainWindow : public QMainWindow, public MessageHandler, public Ui::MainWin
 
 		void createActions();
 		void setupGui();
+		void updateWindowTitle();
 		void customEvent(QEvent *evt) Q_DECL_OVERRIDE;
 		void findDesiredChannel();
 		void setupView(bool toggle_minimize = true);
 		void closeEvent(QCloseEvent *e) Q_DECL_OVERRIDE;
 		void hideEvent(QHideEvent *e) Q_DECL_OVERRIDE;
 		void showEvent(QShowEvent *e) Q_DECL_OVERRIDE;
-		void changeEvent(QEvent* event) Q_DECL_OVERRIDE;
+		void changeEvent(QEvent* e) Q_DECL_OVERRIDE;
 
 		bool handleSpecialContextMenu(const QUrl &url, const QPoint &pos_, bool focus = false);
 		Channel* getContextMenuChannel();
@@ -210,6 +217,7 @@ class MainWindow : public QMainWindow, public MessageHandler, public Ui::MainWin
 		void on_qaUserPrioritySpeaker_triggered();
 		void on_qaUserLocalIgnore_triggered();
 		void on_qaUserLocalMute_triggered();
+		void on_qaUserLocalVolume_triggered();
 		void on_qaUserTextMessage_triggered();
 		void on_qaUserRegister_triggered();
 		void on_qaUserInformation_triggered();
@@ -288,6 +296,8 @@ class MainWindow : public QMainWindow, public MessageHandler, public Ui::MainWin
 		void whisperReleased(QVariant scdata);
 		void onResetAudio();
 		void on_qaFilterToggle_triggered();
+		/// Opens a save dialog for the image referenced by qtcSaveImageCursor.
+		void saveImageAs();
 
 	public:
 		MainWindow(QWidget *parent);

@@ -121,7 +121,12 @@ void MainWindow::msgServerSync(const MumbleProto::ServerSync &msg) {
 	g.uiSession = msg.session();
 	g.pPermissions = ChanACL::Permissions(static_cast<unsigned int>(msg.permissions()));
 	g.l->clearIgnore();
-	g.l->log(Log::Information, tr("Welcome message: %1").arg(u8(msg.welcome_text())));
+	if (msg.has_welcome_text()) {
+		QString str = u8(msg.welcome_text());
+		if (!str.isEmpty()) {
+			g.l->log(Log::Information, tr("Welcome message: %1").arg(str));
+		}
+	}
 	pmModel->ensureSelfVisible();
 	pmModel->recheckLinks();
 
@@ -171,8 +176,12 @@ void MainWindow::msgServerSync(const MumbleProto::ServerSync &msg) {
 
 
 void MainWindow::msgServerConfig(const MumbleProto::ServerConfig &msg) {
-	if (msg.has_welcome_text())
-		g.l->log(Log::Information, tr("Welcome message: %1").arg(u8(msg.welcome_text())));
+	if (msg.has_welcome_text()) {
+		QString str = u8(msg.welcome_text());
+		if (!str.isEmpty()) {
+			g.l->log(Log::Information, tr("Welcome message: %1").arg(str));
+		}
+	}
 	if (msg.has_max_bandwidth())
 		AudioInput::setMaxBandwidth(msg.max_bandwidth());
 	if (msg.has_allow_html())
@@ -181,6 +190,8 @@ void MainWindow::msgServerConfig(const MumbleProto::ServerConfig &msg) {
 		g.uiMessageLength = msg.message_length();
 	if (msg.has_image_message_length())
 		g.uiImageLength = msg.image_message_length();
+	if (msg.has_max_users())
+		g.uiMaxUsers = msg.max_users();
 }
 
 void MainWindow::msgPermissionDenied(const MumbleProto::PermissionDenied &msg) {
@@ -296,6 +307,7 @@ void MainWindow::msgUserState(const MumbleProto::UserState &msg) {
 			pDst->setLocalMute(true);
 		if (Database::isLocalIgnored(pDst->qsHash))
 			pDst->setLocalIgnore(true);
+		pDst->fLocalVolume = Database::getUserLocalVolume(pDst->qsHash);
 	}
 
 	if (bNewUser)
@@ -522,8 +534,13 @@ void MainWindow::msgUserState(const MumbleProto::UserState &msg) {
 		QString newName = u8(msg.name());
 		pmModel->renameUser(pDst, newName);
 		if (! oldName.isNull() && oldName != newName) {
-			g.l->log(Log::Information, tr("%1 renamed to %2").arg(Log::formatClientUser(pDst, Log::Target, oldName),
-				Log::formatClientUser(pDst, Log::Target)));
+			if (pSrc != pDst) {
+				g.l->log(Log::UserRenamed, tr("%1 renamed to %2 by %3.").arg(Log::formatClientUser(pDst, Log::Target, oldName))
+					.arg(Log::formatClientUser(pDst, Log::Target)).arg(Log::formatClientUser(pSrc, Log::Source)));
+			} else {
+				g.l->log(Log::UserRenamed, tr("%1 renamed to %2.").arg(Log::formatClientUser(pDst, Log::Target, oldName),
+					Log::formatClientUser(pDst, Log::Target)));
+			}
 		}
 	}
 	if (msg.has_texture_hash()) {
@@ -656,6 +673,10 @@ void MainWindow::msgChannelState(const MumbleProto::ChannelState &msg) {
 		}
 		if (! ql.isEmpty())
 			pmModel->linkChannels(c, ql);
+	}
+
+	if (msg.has_max_users()) {
+		c->uiMaxUsers = msg.max_users();
 	}
 }
 

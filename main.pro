@@ -1,9 +1,11 @@
 TEMPLATE = subdirs
 CONFIG *= ordered debug_and_release
 
+SUBDIRS *= src/mumble_proto
+
 !CONFIG(no-client) {
-  unix:!CONFIG(bundled-speex):system(pkg-config --atleast-version=1.2 speexdsp) {
-	CONFIG *= no-bundled-speex
+  unix:!CONFIG(bundled-speex):system(pkg-config --atleast-version=1.2 speexdsp):system(pkg-config --atleast-version=1.2 speex) {
+    CONFIG *= no-bundled-speex
   }
   !CONFIG(no-bundled-speex) {
     SUBDIRS *= 3rdparty/speex-build
@@ -25,7 +27,7 @@ CONFIG *= ordered debug_and_release
   }
 
   CONFIG(opus):!CONFIG(no-bundled-opus) {
-	SUBDIRS *= 3rdparty/opus-build
+    SUBDIRS *= 3rdparty/opus-build
   }
 
   win32 {
@@ -43,8 +45,6 @@ CONFIG *= ordered debug_and_release
   }
 
   win32 {
-    SUBDIRS *= 3rdparty/fx11-build-x86
-    SUBDIRS *= 3rdparty/fx11-build-x64
     SUBDIRS *= overlay
     SUBDIRS *= overlay/overlay_exe
     SUBDIRS *= overlay_winx64
@@ -76,6 +76,9 @@ CONFIG *= ordered debug_and_release
 }
 
 !CONFIG(no-server) {
+  !CONFIG(no-ice) {
+    SUBDIRS *= src/murmur/murmur_ice
+  }
   SUBDIRS *= src/murmur
 }
 

@@ -171,7 +171,7 @@ struct Settings {
 
 	AudioTransmit atTransmit;
 	quint64 uiDoublePush;
-	quint64 uiPTTHold;
+	quint64 pttHold;
 
 	bool bExpert;
 
@@ -204,6 +204,8 @@ struct Settings {
 	bool bAttenuateOthersOnTalk;
 	bool bAttenuateOthers;
 	bool bAttenuateUsersOnPrioritySpeak;
+	bool bOnlyAttenuateSameOutput;
+	bool bAttenuateLoopbacks;
 	int iOutputDelay;
 
 	QString qsALSAInput, qsALSAOutput;
@@ -241,6 +243,9 @@ struct Settings {
 	bool bShortcutEnable;
 	bool bSuppressMacEventTapWarning;
 	bool bEnableEvdev;
+	bool bEnableXInput2;
+	bool bEnableGKey;
+	bool bEnableXboxInput;
 	QList<Shortcut> qlShortcuts;
 
 	enum MessageLog { LogNone = 0x00, LogConsole = 0x01, LogTTS = 0x02, LogBalloon = 0x04, LogSoundfile = 0x08};
@@ -249,8 +254,12 @@ struct Settings {
 	QMap<int, quint32> qmMessages;
 
 	QString qsLanguage;
-	QString qsStyle;
-	QString qsSkin;
+
+	/// Name of the theme to use. @see Themes
+	QString themeName;
+	/// Name of the style to use from theme. @see Themes
+	QString themeStyleName;
+	
 	QByteArray qbaMainWindowGeometry, qbaMainWindowState, qbaMinimalViewGeometry, qbaMinimalViewState, qbaSplitterState, qbaHeaderState;
 	QByteArray qbaConfigGeometry;
 	enum WindowLayout { LayoutClassic, LayoutStacked, LayoutHybrid, LayoutCustom };
@@ -296,6 +305,9 @@ struct Settings {
 	unsigned short usProxyPort;
 	QString qsRegionalHost;
 
+	// Network settings - SSL
+	QString qsSslCiphers;
+
 	static const int ciDefaultMaxImageSize = 50 * 1024; // Restrict to 50KiB as a default
 	int iMaxImageSize;
 	int iMaxImageWidth;
@@ -333,6 +345,8 @@ struct Settings {
 	LoopMode lmLoopMode;
 	float dPacketLoss;
 	float dMaxPacketDelay;
+	/// If true settings in this structure require a client restart to apply fully
+	bool requireRestartToApply;
 
 	bool doEcho() const;
 	bool doPositionalAudio() const;

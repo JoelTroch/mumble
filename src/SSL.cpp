@@ -34,6 +34,71 @@
 
 #include "Version.h"
 
+QString MumbleSSL::defaultOpenSSLCipherString() {
+	return QLatin1String("EECDH+AESGCM:EDH+aRSA+AESGCM:DHE-RSA-AES256-SHA:DHE-RSA-AES128-SHA:AES256-SHA:AES128-SHA");
+}
+
+QList<QSslCipher> MumbleSSL::ciphersFromOpenSSLCipherString(QString cipherString) {
+	QList<QSslCipher> chosenCiphers;
+
+	SSL_CTX *ctx = NULL;
+	SSL *ssl = NULL;
+	const SSL_METHOD *meth = NULL;
+	int i = 0;
+
+	QByteArray csbuf = cipherString.toLatin1();
+	const char *ciphers = csbuf.constData();
+
+	meth = SSLv23_server_method();
+	if (meth == NULL) {
+		qWarning("MumbleSSL: unable to get SSL method");
+		goto out;
+	}
+
+	// We use const_cast to be compatible with OpenSSL 0.9.8.
+	ctx = SSL_CTX_new(const_cast<SSL_METHOD *>(meth));
+	if (ctx == NULL) {
+		qWarning("MumbleSSL: unable to allocate SSL_CTX");
+		goto out;
+	}
+
+	if (!SSL_CTX_set_cipher_list(ctx, ciphers)) {
+		qWarning("MumbleSSL: error parsing OpenSSL cipher string in ciphersFromOpenSSLCipherString");
+		goto out;
+	}
+
+	ssl = SSL_new(ctx);
+	if (ssl == NULL) {
+		qWarning("MumbleSSL: unable to create SSL object in ciphersFromOpenSSLCipherString");
+		goto out;
+	}
+
+	while (1) {
+		const char *name = SSL_get_cipher_list(ssl, i);
+		if (name == NULL) {
+			break;
+		}
+#if QT_VERSION >= 0x050300
+		QSslCipher c = QSslCipher(QString::fromLatin1(name));
+		if (!c.isNull()) {
+			chosenCiphers << c;
+		}
+#else
+		foreach (const QSslCipher &c, QSslSocket::supportedCiphers()) {
+			if (c.name() == QString::fromLatin1(name)) {
+				chosenCiphers << c;
+			}
+		}
+#endif
+		++i;
+	}
+
+out:
+	SSL_CTX_free(ctx);
+	SSL_free(ssl);
+	return chosenCiphers;
+}
+
 void MumbleSSL::addSystemCA() {
 #if QT_VERSION < 0x040700 && !defined(NO_SYSTEM_CA_OVERRIDE)
 #if defined(Q_OS_WIN)
@@ -185,4 +250,25 @@ void MumbleSSL::addSystemCA() {
 		qWarning("SSL: CA certificate filter applied. Filtered size: %i, original size: %i", filteredCaList.size(), caList.size());
 	}
 #endif
+}
+
+QString MumbleSSL::protocolToString(QSsl::SslProtocol protocol) {
+	switch(protocol) {
+		case QSsl::SslV3: return QLatin1String("SSL 3");
+		case QSsl::SslV2: return QLatin1String("SSL 2");
+#if QT_VERSION >= 0x050000
+		case QSsl::TlsV1_0: return QLatin1String("TLS 1.0");
+		case QSsl::TlsV1_1: return QLatin1String("TLS 1.1");
+		case QSsl::TlsV1_2: return QLatin1String("TLS 1.2");
+#else
+		case QSsl::TlsV1: return  QLatin1String("TLS 1.0");
+#endif
+		case QSsl::AnyProtocol: return QLatin1String("AnyProtocol");
+#if QT_VERSION >= 0x040800
+		case QSsl::TlsV1SslV3: return QLatin1String("TlsV1SslV3");
+		case QSsl::SecureProtocols: return QLatin1String("SecureProtocols");
+#endif
+		default:
+		case QSsl::UnknownProtocol: return QLatin1String("UnknownProtocol");
+	}
 }

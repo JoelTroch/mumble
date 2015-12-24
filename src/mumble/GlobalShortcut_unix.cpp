@@ -35,6 +35,21 @@
 #include "Global.h"
 #include "Settings.h"
 
+// We have to use a global 'diagnostic ignored' pragmas because
+// we still support old versions of GCC. (FreeBSD 9.3 ships with GCC 4.2)
+#if defined (__GNUC__)
+// ScreenCount(...) and so on are macros that access the private structure and
+// cast their return value using old-style-casts. Hence we suppress these warnings
+// for this section of code.
+# pragma GCC diagnostic ignored "-Wold-style-cast"
+// XKeycodeToKeysym is deprecated.
+// For backwards compatibility reasons we want to keep using the
+// old function as long as possible. The replacement function
+// XkbKeycodeToKeysym requires the XKB extension which isn't
+// guaranteed to be present.
+# pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+
 /**
  * Returns a platform specific GlobalShortcutEngine object.
  *
@@ -83,9 +98,9 @@ GlobalShortcutX::GlobalShortcutX() {
 #ifndef NO_XINPUT2
 	int evt, error;
 
-	if (XQueryExtension(display, "XInputExtension", &iXIopcode, &evt, &error)) {
-		int major = 2;
-		int minor = 0;
+	if (g.s.bEnableXInput2 && XQueryExtension(display, "XInputExtension", &iXIopcode, &evt, &error)) {
+		int major = XI_2_Major;
+		int minor = XI_2_Minor;
 		int rc = XIQueryVersion(display, &major, &minor);
 		if (rc != BadRequest) {
 			qWarning("GlobalShortcutX: Using XI2 %d.%d", major, minor);
@@ -333,6 +348,8 @@ void GlobalShortcutX::directoryChanged(const QString &dir) {
 			}
 		}
 	}
+#else
+	Q_UNUSED(dir);
 #endif
 }
 
@@ -342,6 +359,11 @@ QString GlobalShortcutX::buttonName(const QVariant &v) {
 	if (!ok)
 		return QString();
 	if ((key < 0x118) || (key >= 0x128)) {
+
+		// For backwards compatibility reasons we want to keep using the
+		// old function as long as possible. The replacement function
+		// XkbKeycodeToKeysym requires the XKB extension which isn't
+		// guaranteed to be present.
 		KeySym ks=XKeycodeToKeysym(display, static_cast<KeyCode>(key), 0);
 		if (ks == NoSymbol) {
 			return QLatin1String("0x")+QString::number(key,16);

@@ -58,7 +58,7 @@
 struct FavoriteServer;
 class QUdpSocket;
 
-typedef QPair<QHostAddress, unsigned short> qpAddress;
+typedef QPair<HostAddress, unsigned short> qpAddress;
 
 struct PublicInfo {
 	QString qsName;
@@ -166,7 +166,23 @@ class ServerItem : public QTreeWidgetItem, public PingStats {
 		ServerItem(const QString &name, ItemType itype, const QString &continent = QString(), const QString &country = QString());
 		ServerItem(const ServerItem *si);
 		~ServerItem();
-		static ServerItem *fromMimeData(const QMimeData *mime, QWidget *p = NULL);
+
+		/// Converts given mime data into a ServerItem object
+		///
+		/// This function checks the clipboard for a valid mumble:// style
+		/// URL and converts it into a ServerItem ready to add to the connect
+		/// dialog. It also parses .lnk files of InternetShortcut/URL type
+		/// to enable those to be dropped onto the clipboard.
+		///
+		/// @note If needed can query the user for a user name using a modal dialog.
+		/// @note If a server item is returned it's the callers reponsibility to delete it.
+		///
+		/// @param mime Mime data to analyze
+		/// @param default_name If true the hostname is set as item name if none is given
+		/// @param p Parent widget to use in case the user has to be queried
+		/// @return Server item or NULL if mime data invalid.
+		///
+		static ServerItem *fromMimeData(const QMimeData *mime, bool default_name = true, QWidget *p = NULL);
 
 		void addServerItem(ServerItem *child);
 
@@ -190,15 +206,24 @@ class ConnectDialogEdit : public QDialog, protected Ui::ConnectDialogEdit {
 		Q_DISABLE_COPY(ConnectDialogEdit)
 	protected:
 		bool bOk;
+		bool bCustomLabel;
 	public slots:
 		void validate();
 		void accept();
 
 		void on_qcbShowPassword_toggled(bool);
+		void on_qleName_textEdited(const QString&);
+		void on_qleServer_textEdited(const QString&);
 	public:
 		QString qsName, qsHostname, qsUsername, qsPassword;
 		unsigned short usPort;
-		ConnectDialogEdit(QWidget *parent, const QString &name = QString(), const QString &host = QString(), const QString &user = QString(), unsigned short port = DEFAULT_MUMBLE_PORT, const QString &password = QString(), bool add = false);
+		ConnectDialogEdit(QWidget *parent,
+		                  const QString &name = QString(),
+		                  const QString &host = QString(),
+		                  const QString &user = QString(),
+		                  unsigned short port = DEFAULT_MUMBLE_PORT,
+		                  const QString &password = QString(),
+		                  bool add = false);
 };
 
 class ConnectDialog : public QDialog, public Ui::ConnectDialog {
@@ -243,6 +268,22 @@ class ConnectDialog : public QDialog, public Ui::ConnectDialog {
 
 		bool bLastFound;
 
+		/// bAllowPing determines whether ConnectDialog can use
+		/// UDP packets to ping remote hosts to be able to show a
+		/// ping latency and user count.
+		bool bAllowPing;
+		/// bAllowHostLookup determines whether ConnectDialog can
+		/// resolve hosts via DNS, Bonjour, and so on.
+		bool bAllowHostLookup;
+		/// bAllowBonjour determines whether ConfigDialog can use
+		/// Bonjour to find nearby servers on the local network.
+		bool bAllowBonjour;
+		/// bAllowFilters determines whether filters are available
+		/// in the ConfigDialog. If this option is diabled, the
+		/// 'Show All' filter is forced, and no other filter can
+		/// be chosen.
+		bool bAllowFilters;
+
 		QMap<QString, QIcon> qmIcons;
 
 		void sendPing(const QHostAddress &, unsigned short port);
@@ -254,7 +295,7 @@ class ConnectDialog : public QDialog, public Ui::ConnectDialog {
 		void stopDns(ServerItem *);
 	public slots:
 		void accept();
-		void fetched(QByteArray, QUrl, QMap<QString, QString>);
+		void fetched(QByteArray xmlData, QUrl, QMap<QString, QString>);
 
 		void udpReply();
 		void lookedUp(QHostInfo);

@@ -38,6 +38,7 @@
 
 RichTextHtmlEdit::RichTextHtmlEdit(QWidget *p) : QTextEdit(p) {
 	m_document = new LogDocument(this);
+	m_document->setDefaultStyleSheet(qApp->styleSheet());
 	setDocument(m_document);
 }
 
@@ -294,11 +295,11 @@ void RichTextEditor::on_qteRichText_textChanged() {
 
 	richToPlain();
 
-	const QString &text = qptePlainText->toPlainText();
+	const QString &plainText = qptePlainText->toPlainText();
 
 	bool over = true;
 
-	unsigned int imagelength = text.length();
+	unsigned int imagelength = plainText.length();
 
 
 	if (g.uiMessageLength && imagelength <= g.uiMessageLength) {
@@ -307,7 +308,7 @@ void RichTextEditor::on_qteRichText_textChanged() {
 		over = true;
 	} else {
 		QString qsOut;
-		QXmlStreamReader qxsr(QString::fromLatin1("<document>%1</document>").arg(text));
+		QXmlStreamReader qxsr(QString::fromLatin1("<document>%1</document>").arg(plainText));
 		QXmlStreamWriter qxsw(&qsOut);
 		while (! qxsr.atEnd()) {
 			switch (qxsr.readNext()) {

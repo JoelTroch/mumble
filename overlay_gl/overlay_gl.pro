@@ -16,12 +16,17 @@ unix:!macx {
 	TARGET = mumble$(TARGET_ADD)
 
 	DEFINES += TARGET_UNIX
-	LIBS *= -lrt -ldl
+	linux {
+		LIBS *= -lrt -ldl
+	}
 	QMAKE_CFLAGS *= -fvisibility=hidden $(CFLAGS_ADD)
 	QMAKE_LFLAGS -= -Wl,--no-undefined
+
+	QMAKE_LFLAGS -= -Wl,-z,now
+	QMAKE_LFLAGS += -Wl,-z,lazy
+
 	QMAKE_LFLAGS *= $(LFLAGS_ADD)
 	equals(QMAKE_LINK,g++) {
-	  message(Overriding linker)
 	  QMAKE_LINK = gcc
 	  QMAKE_LINK_SHLIB = gcc
 	}

@@ -304,8 +304,8 @@ ALSAAudioInput::~ALSAAudioInput() {
 	wait();
 }
 
-#define ALSA_ERRBAIL(x) if (!bOk) {} else if ((err=(x)) < 0) { bOk = false; qWarning("ALSAAudio: %s: %s", #x, snd_strerror(err));}
-#define ALSA_ERRCHECK(x) if (!bOk) {} else if ((err=(x)) < 0) {qWarning("ALSAAudio: Non-critical: %s: %s", #x, snd_strerror(err));}
+#define ALSA_ERRBAIL(x) if (!bOk) {} else if ((err=static_cast<int>(x)) < 0) { bOk = false; qWarning("ALSAAudio: %s: %s", #x, snd_strerror(err));}
+#define ALSA_ERRCHECK(x) if (!bOk) {} else if ((err=static_cast<int>(x)) < 0) {qWarning("ALSAAudio: Non-critical: %s: %s", #x, snd_strerror(err));}
 
 void ALSAAudioInput::run() {
 	QMutexLocker qml(&qmALSA);
@@ -382,8 +382,11 @@ void ALSAAudioInput::run() {
 #endif
 		readblapp = snd_pcm_readi(capture_handle, inbuff, static_cast<int>(wantPeriod));
 		if (readblapp == -ESTRPIPE) {
-			// suspend event - what to do?
-			qWarning("ALSAAudioInput: %s", snd_strerror(static_cast<int>(readblapp)));
+			qWarning("ALSAAudioInput: PCM suspended, trying to resume");
+			while (bRunning && snd_pcm_resume(capture_handle) == -EAGAIN)
+				msleep(1000);
+			if ((err = snd_pcm_prepare(capture_handle)) < 0)
+				qWarning("ALSAAudioInput: %s: %s", snd_strerror(static_cast<int>(readblapp)), snd_strerror(err));
 		} else if (readblapp == -EPIPE) {
 			err = snd_pcm_prepare(capture_handle);
 			qWarning("ALSAAudioInput: %s: %s", snd_strerror(static_cast<int>(readblapp)), snd_strerror(err));
@@ -565,7 +568,7 @@ void ALSAAudioOutput::run() {
 			if (! stillRun) {
 				snd_pcm_drain(pcm_handle);
 
-				while (bRunning && !mix(outbuff, period_size)) {
+				while (bRunning && !mix(outbuff, static_cast<unsigned int>(period_size))) {
 					this->msleep(10);
 				}
 

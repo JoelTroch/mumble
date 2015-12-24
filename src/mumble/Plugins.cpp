@@ -39,6 +39,7 @@
 #include "ServerHandler.h"
 #include "../../plugins/mumble_plugin.h"
 #include "WebFetch.h"
+#include "MumbleApplication.h"
 
 #ifdef Q_OS_WIN
 // from os_win.cpp
@@ -73,11 +74,11 @@ PluginInfo::PluginInfo() {
 struct PluginFetchMeta {
 	QString hash;
 	QString path;
-	PluginFetchMeta(const QString &hash = QString(), const QString &path = QString());
+	
+	PluginFetchMeta(const QString &hash_ = QString(), const QString &path_ = QString())
+		: hash(hash_)
+		, path(path_) { /* Empty */ }
 };
-
-PluginFetchMeta::PluginFetchMeta(const QString &hash, const QString &path) : hash(hash), path(path) {
-}
 
 
 PluginConfig::PluginConfig(Settings &st) : ConfigWidget(st) {
@@ -228,9 +229,8 @@ Plugins::Plugins(QObject *p) : QObject(p) {
 
 #ifdef QT_NO_DEBUG
 #ifndef PLUGIN_PATH
-#ifndef Q_OS_MAC
-	qsSystemPlugins=QString::fromLatin1("%1/plugins").arg(qApp->applicationDirPath());
-#else
+	qsSystemPlugins=QString::fromLatin1("%1/plugins").arg(MumbleApplication::instance()->applicationVersionRootPath());
+#ifdef Q_OS_MAC
 	qsSystemPlugins=QString::fromLatin1("%1/../Plugins").arg(qApp->applicationDirPath());
 #endif
 #else
@@ -239,7 +239,7 @@ Plugins::Plugins(QObject *p) : QObject(p) {
 
 	qsUserPlugins = g.qdBasePath.absolutePath() + QLatin1String("/Plugins");
 #else
-	qsSystemPlugins = QString::fromLatin1("%1/plugins").arg(qApp->applicationDirPath());
+	qsSystemPlugins = QString::fromLatin1("%1/plugins").arg(MumbleApplication::instance()->applicationVersionRootPath());
 	qsUserPlugins = QString();
 #endif
 
@@ -539,8 +539,8 @@ void Plugins::fetched(QByteArray data, QUrl url) {
 		return;
 
 	bool rescan = false;
-	const QString &path = url.path();
-	if (path == QLatin1String("/plugins.php")) {
+	const QString &urlPath = url.path();
+	if (urlPath == QLatin1String("/plugins.php")) {
 		qmPluginFetchMeta.clear();
 		QDomDocument doc;
 		doc.setContent(data);
@@ -627,18 +627,18 @@ void Plugins::fetched(QByteArray data, QUrl url) {
 		for (i = qmPluginFetchMeta.constBegin(); i != qmPluginFetchMeta.constEnd(); ++i) {
 			PluginFetchMeta pfm = i.value();
 			if (! pfm.hash.isEmpty()) {
-				QUrl url;
+				QUrl pluginDownloadUrl;
 				if (pfm.path.isEmpty()) {
-					url.setPath(QString::fromLatin1("plugins/%1").arg(i.key()));
+					pluginDownloadUrl.setPath(QString::fromLatin1("plugins/%1").arg(i.key()));
 				} else {
-					url.setPath(pfm.path);
+					pluginDownloadUrl.setPath(pfm.path);
 				}
 
-				WebFetch::fetch(url, this, SLOT(fetched(QByteArray,QUrl)));
+				WebFetch::fetch(pluginDownloadUrl, this, SLOT(fetched(QByteArray,QUrl)));
 			}
 		}
 	} else {
-		QString fname = QFileInfo(path).fileName();
+		QString fname = QFileInfo(urlPath).fileName();
 		if (qmPluginFetchMeta.contains(fname)) {
 			PluginFetchMeta pfm = qmPluginFetchMeta.value(fname);
 			if (pfm.hash == QLatin1String(sha1(data).toHex())) {

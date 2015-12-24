@@ -63,6 +63,15 @@ ACLEditor::ACLEditor(int channelparentid, QWidget *p) : QDialog(p) {
 	qleChannelPassword->hide();
 	qlChannelPassword->hide();
 
+	if (g.sh->uiVersion >= 0x010300) {
+		qsbChannelMaxUsers->setRange(0, INT_MAX);
+		qsbChannelMaxUsers->setValue(0);
+		qsbChannelMaxUsers->setSpecialValueText(tr("Default server value"));
+	} else {
+		qlChannelMaxUsers->hide();
+		qsbChannelMaxUsers->hide();
+	}
+
 	qlChannelID->hide();
 
 	qleChannelName->setFocus();
@@ -103,6 +112,15 @@ ACLEditor::ACLEditor(int channelid, const MumbleProto::ACL &mea, QWidget *p) : Q
 
 	qsbChannelPosition->setRange(INT_MIN, INT_MAX);
 	qsbChannelPosition->setValue(pChannel->iPosition);
+
+	if (g.sh->uiVersion >= 0x010300) {
+		qsbChannelMaxUsers->setRange(0, INT_MAX);
+		qsbChannelMaxUsers->setValue(pChannel->uiMaxUsers);
+		qsbChannelMaxUsers->setSpecialValueText(tr("Default server value"));
+	} else {
+		qlChannelMaxUsers->hide();
+		qsbChannelMaxUsers->hide();
+	}
 
 	QGridLayout *grid = new QGridLayout(qgbACLpermissions);
 
@@ -260,7 +278,7 @@ void ACLEditor::accept() {
 
 	// Update channel state
 	if (bAddChannelMode) {
-		g.sh->createChannel(iChannel, qleChannelName->text(), rteChannelDescription->text(), qsbChannelPosition->value(), qcbChannelTemporary->isChecked());
+		g.sh->createChannel(iChannel, qleChannelName->text(), rteChannelDescription->text(), qsbChannelPosition->value(), qcbChannelTemporary->isChecked(), qsbChannelMaxUsers->value());
 	} else {
 		bool needs_update = false;
 
@@ -273,13 +291,17 @@ void ACLEditor::accept() {
 			needs_update = true;
 		}
 		if (rteChannelDescription->isModified() && (pChannel->qsDesc != rteChannelDescription->text())) {
-			const QString &msg = rteChannelDescription->text();
-			mpcs.set_description(u8(msg));
+			const QString &descriptionText = rteChannelDescription->text();
+			mpcs.set_description(u8(descriptionText));
 			needs_update = true;
-			Database::setBlob(sha1(msg), msg.toUtf8());
+			Database::setBlob(sha1(descriptionText), descriptionText.toUtf8());
 		}
 		if (pChannel->iPosition != qsbChannelPosition->value()) {
 			mpcs.set_position(qsbChannelPosition->value());
+			needs_update = true;
+		}
+		if (pChannel->uiMaxUsers != static_cast<unsigned int>(qsbChannelMaxUsers->value())) {
+			mpcs.set_max_users(qsbChannelMaxUsers->value());
 			needs_update = true;
 		}
 		if (needs_update)

@@ -91,8 +91,8 @@ struct Ban {
 #if Q_BYTE_ORDER == Q_BIG_ENDIAN
 #define SWAP64(x) (x)
 #else
-#ifdef __x86_64__
-#define SWAP64(x) ({register quint64 __out, __in = (x); __asm__("bswap %q0" : "=r"(__out) : "0"(__in)); __out;})
+#if defined(__x86_64__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 3))
+#define SWAP64(x) __builtin_bswap64(x)
 #else
 #define SWAP64(x) qbswap<quint64>(x)
 #endif

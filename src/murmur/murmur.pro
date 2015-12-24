@@ -68,34 +68,15 @@ macx {
 
 dbus {
 	DEFINES *= USE_DBUS
-	CONFIG *= qdbus
+	QT *= dbus
 	HEADERS *= DBus.h
 	SOURCES *= DBus.cpp
 }
 
 ice {
-	SLICEFILES = Murmur.ice
-
-	slice.output = ${QMAKE_FILE_BASE}.cpp
-	win32 {
-		slice.commands = slice2cpp --checksum -I\"$$ICE_PATH/slice\" ${QMAKE_FILE_NAME}
-	} else {
-		slice.commands = slice2cpp --checksum -I/usr/local/share/Ice -I/usr/share/Ice/slice -I/usr/share/slice -I/usr/share/Ice-3.4.1/slice/ -I/usr/share/Ice-3.3.1/slice/ -I/usr/share/Ice-3.4.2/slice/ -I/usr/share/Ice-3.5.0/slice/ -I/usr/share/Ice-3.5.1/slice/ ${QMAKE_FILE_NAME}
-	}
-	slice.input = SLICEFILES
-	slice.CONFIG *= no_link explicit_dependencies
-	slice.variable_out = SOURCES
-
-	sliceh.output = ${QMAKE_FILE_BASE}.h
-	sliceh.depends = ${QMAKE_FILE_BASE}.cpp
-	sliceh.commands = $$escape_expand(\\n)
-	sliceh.input = SLICEFILES
-	sliceh.CONFIG *= no_link explicit_dependencies target_predeps
-
-	QMAKE_EXTRA_COMPILERS *= slice sliceh
-
 	SOURCES *= MurmurIce.cpp
 	HEADERS *= MurmurIce.h
+
 	win32:CONFIG(debug, debug|release) {
 		LIBS *= -lIceD -lIceUtilD
 	} else {
@@ -125,13 +106,11 @@ ice {
 	macx {
 		INCLUDEPATH *= $$(MUMBLE_PREFIX)/Ice-3.4.2/include/
 		QMAKE_LIBDIR *= $$(MUMBLE_PREFIX)/Ice-3.4.2/lib/
-		slice.commands = $$(MUMBLE_PREFIX)/Ice-3.4.2/bin/slice2cpp --checksum -I$$(MUMBLE_PREFIX)/Ice-3.4.2/slice/ Murmur.ice
 	}
 
 	CONFIG(ermine) {
 		INCLUDEPATH *= $$(MUMBLE_ICE_PREFIX)/include/
 		QMAKE_LIBDIR *= $$(MUMBLE_ICE_PREFIX)/lib/
-		slice.commands = $$(MUMBLE_ICE_PREFIX)/bin/slice2cpp --checksum -I$$(MUMBLE_ICE_PREFIX)/slice/ Murmur.ice
 	}
 
 	unix:!macx:CONFIG(static) {
@@ -139,12 +118,19 @@ ice {
 		QMAKE_LIBDIR *= /opt/Ice-3.3/lib
 		LIBS *= -lbz2
 		QMAKE_CXXFLAGS *= -fPIC
-		slice.commands = /opt/Ice-3.3/bin/slice2cpp --checksum -I/opt/Ice-3.3/slice Murmur.ice
 	}
 
 	macx:CONFIG(static) {
 		LIBS *= -lbz2 -liconv
 		QMAKE_CXXFLAGS *= -fPIC
+	}
+
+	LIBS *= -lmurmur_ice
+	INCLUDEPATH *= murmur_ice
+
+	unix {
+		QMAKE_CFLAGS *= "-isystem murmur_ice"
+		QMAKE_CXXFLAGS *= "-isystem murmur_ice"
 	}
 }
 
@@ -165,6 +151,22 @@ bonjour {
 		} else {
 			LIBS *= -ldns_sd
 		}
+	}
+}
+
+# Check for QSslDiffieHellmanParameters availability, and define
+# USE_QSSLDIFFIEHELLMANPARAMETERS preprocessor if available.
+#
+# Can be disabled with no-qssldiffiehellmanparameters.
+!CONFIG(no-qssldiffiehellmanparameters):exists($$[QT_INSTALL_HEADERS]/QtNetwork/QSslDiffieHellmanParameters) {
+	# ...but only if we're inside a Mumble build environment for now.
+	# If someone decides to put a Mumble snapshot into a distro, this
+	# could break the build in the future, with newer versions of Qt,
+	# if the API of QSslDiffieHellmanParameters changes when it is
+	# upstreamed.
+	MUMBLE_PREFIX=$$(MUMBLE_PREFIX)
+	!isEmpty(MUMBLE_PREFIX) {
+		DEFINES += USE_QSSLDIFFIEHELLMANPARAMETERS
 	}
 }
 

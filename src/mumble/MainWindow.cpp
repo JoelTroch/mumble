@@ -62,11 +62,14 @@
 #include "UserEdit.h"
 #include "UserInformation.h"
 #include "UserModel.h"
+#include "UserLocalVolumeDialog.h"
 #include "VersionCheck.h"
 #include "ViewCert.h"
 #include "VoiceRecorderDialog.h"
 #include "../SignalCurry.h"
 #include "Settings.h"
+#include "Themes.h"
+#include "SSLCipherInfo.h"
 
 #ifdef Q_OS_WIN
 #include "TaskList.h"
@@ -83,8 +86,6 @@ MessageBoxEvent::MessageBoxEvent(QString m) : QEvent(static_cast<QEvent::Type>(M
 OpenURLEvent::OpenURLEvent(QUrl u) : QEvent(static_cast<QEvent::Type>(OU_QEVENT)) {
 	url = u;
 }
-
-const QString MainWindow::defaultStyleSheet = QLatin1String(".log-channel{text-decoration:none;}.log-user{text-decoration:none;}p{margin:0;}");
 
 MainWindow::MainWindow(QWidget *p) : QMainWindow(p) {
 	qiIconMuteSelf.addFile(QLatin1String("skin:muted_self.svg"));
@@ -134,6 +135,7 @@ MainWindow::MainWindow(QWidget *p) : QMainWindow(p) {
 	uiNewHardware = 1;
 #endif
 	bSuppressAskOnQuit = false;
+	restartOnQuit = false;
 	bAutoUnmute = false;
 
 	Channel::add(0, tr("Root"));
@@ -257,7 +259,7 @@ void MainWindow::createActions() {
 }
 
 void MainWindow::setupGui()  {
-	setWindowTitle(tr("Mumble -- %1").arg(QLatin1String(MUMBLE_RELEASE)));
+	updateWindowTitle();
 	setCentralWidget(qtvUsers);
 	setAcceptDrops(true);
 
@@ -385,6 +387,16 @@ void MainWindow::setupGui()  {
 #endif
 }
 
+void MainWindow::updateWindowTitle() {
+	QString title;
+	if (g.s.bMinimalView) {
+		title = tr("Mumble - Minimal View -- %1");
+	} else {
+		title = tr("Mumble -- %1");
+	}
+	setWindowTitle(title.arg(QLatin1String(MUMBLE_RELEASE)));
+}
+
 // Sets whether or not to show the title bars on the MainWindow's
 // dock widgets.
 void MainWindow::setShowDockTitleBars(bool doShow) {
@@ -461,7 +473,8 @@ void MainWindow::closeEvent(QCloseEvent *e) {
 	g.bQuit = true;
 
 	QMainWindow::closeEvent(e);
-	qApp->quit();
+	
+	qApp->exit(restartOnQuit ? MUMBLE_EXIT_CODE_RESTART : 0);
 }
 
 void MainWindow::hideEvent(QHideEvent *e) {
@@ -491,9 +504,8 @@ void MainWindow::showEvent(QShowEvent *e) {
 	QMainWindow::showEvent(e);
 }
 
-void MainWindow::changeEvent(QEvent *event)
-{
-	QWidget::changeEvent(event);
+void MainWindow::changeEvent(QEvent *e) {
+	QWidget::changeEvent(e);
 	if (isMinimized() && g.s.bHideInTray) {
 		// Workaround http://qt-project.org/forums/viewthread/4423/P15/#50676
 		QTimer::singleShot(0, this, SLOT(hide()));
@@ -565,9 +577,9 @@ ClientUser *MainWindow::getContextMenuUser() {
 bool MainWindow::handleSpecialContextMenu(const QUrl &url, const QPoint &pos_, bool focus) {
 	if (url.scheme() == QString::fromLatin1("clientid")) {
 		bool ok = false;
-		QString x(url.host());
-		if (x.length() == 40) {
-			ClientUser *cu = pmModel->getUser(x);
+		QString maybeUserHash(url.host());
+		if (maybeUserHash.length() == 40) {
+			ClientUser *cu = pmModel->getUser(maybeUserHash);
 			if (cu) {
 				cuContextUser = cu;
 				ok = true;
@@ -642,10 +654,47 @@ void MainWindow::on_qteLog_customContextMenuRequested(const QPoint &mpos) {
 
 	QPoint contentPosition = QPoint(QApplication::isRightToLeft() ? (qteLog->horizontalScrollBar()->maximum() - qteLog->horizontalScrollBar()->value()) : qteLog->horizontalScrollBar()->value(), qteLog->verticalScrollBar()->value());
 	QMenu *menu = qteLog->createStandardContextMenu(mpos + contentPosition);
+
+	QTextCursor cursor = qteLog->cursorForPosition(mpos);
+	QTextCharFormat fmt = cursor.charFormat();
+	if (fmt.objectType() == QTextFormat::NoObject) {
+		cursor.movePosition(QTextCursor::NextCharacter);
+		fmt = cursor.charFormat();
+	}
+	if (cursor.charFormat().isImageFormat()) {
+		menu->addSeparator();
+		menu->addAction(tr("Save Image As..."), this, SLOT(saveImageAs(void)));
+
+		qtcSaveImageCursor = cursor;
+	}
+
 	menu->addSeparator();
 	menu->addAction(tr("Clear"), qteLog, SLOT(clear(void)));
 	menu->exec(qteLog->mapToGlobal(mpos));
 	delete menu;
+}
+
+void MainWindow::saveImageAs() {
+	QDateTime now = QDateTime::currentDateTime();
+	QString defaultFname = QString::fromLatin1("Mumble-%1.jpg").arg(now.toString(QString::fromLatin1("yyyy-MM-dd-HHmmss")));
+
+	QString fname = QFileDialog::getSaveFileName(this, tr("Save Image File"), defaultFname, tr("Images (*.png *.jpg *.jpeg)"));
+	if (fname.isNull()) {
+		return;
+	}
+
+	QString resName = qtcSaveImageCursor.charFormat().toImageFormat().name();
+	QVariant res = qteLog->document()->resource(QTextDocument::ImageResource, resName);
+	QImage img = res.value<QImage>();
+	bool ok = img.save(fname);
+	if (!ok) {
+		// In case fname did not contain a file extension, try saving with an
+		// explicit format.
+		ok = img.save(fname, "JPG");
+	}
+	if (!ok) {
+		g.l->log(Log::Warning, tr("Could not save image: %1").arg(Qt::escape(fname)));
+	}
 }
 
 static void recreateServerHandler() {
@@ -1081,11 +1130,12 @@ void MainWindow::qcbTransmitMode_activated(int index) {
 void MainWindow::on_qmServer_aboutToShow() {
 	qmServer->clear();
 	qmServer->addAction(qaServerConnect);
+	qmServer->addSeparator();
 	qmServer->addAction(qaServerDisconnect);
-	qmServer->addAction(qaServerBanList);
-	qmServer->addAction(qaServerUserList);
 	qmServer->addAction(qaServerInformation);
 	qmServer->addAction(qaServerTokens);
+	qmServer->addAction(qaServerUserList);
+	qmServer->addAction(qaServerBanList);
 	qmServer->addSeparator();
 	qmServer->addAction(qaQuit);
 
@@ -1151,10 +1201,10 @@ void MainWindow::on_qaServerInformation_triggered() {
 	CryptState &cs = c->csCrypt;
 	QSslCipher qsc = g.sh->qscCipher;
 
-	QString qsVersion=tr("<h2>Version</h2><p>Protocol %1.</p>").arg(MumbleVersion::toString(g.sh->uiVersion));
+	QString qsVersion=tr("<h2>Version</h2><p>Protocol %1</p>").arg(MumbleVersion::toString(g.sh->uiVersion));
 
 	if (g.sh->qsRelease.isEmpty() || g.sh->qsOS.isEmpty() || g.sh->qsOSVersion.isEmpty()) {
-		qsVersion.append(tr("<p>No build information or OS version available.</p>"));
+		qsVersion.append(tr("<p>No build information or OS version available</p>"));
 	} else {
 		qsVersion.append(tr("<p>%1 (%2)<br />%3</p>")
 		                 .arg(Qt::escape(g.sh->qsRelease), Qt::escape(g.sh->qsOS), Qt::escape(g.sh->qsOSVersion)));
@@ -1165,16 +1215,65 @@ void MainWindow::on_qaServerInformation_triggered() {
 
 	g.sh->getConnectionInfo(host,port,uname,pw);
 
-	QString qsControl=tr("<h2>Control channel</h2><p>Encrypted with %1 bit %2<br />%3 ms average latency (%4 deviation)</p><p>Remote host %5 (port %6)</p>").arg(QString::number(qsc.usedBits()),
-	                  Qt::escape(qsc.name()),
+	const SSLCipherInfo *ci = SSLCipherInfoLookupByOpenSSLName(qsc.name().toLatin1().constData());
+	
+	QString cipherDescription;
+	if (ci && ci->message_authentication && ci->encryption && ci->key_exchange_verbose && ci->rfc_name) {
+		if (QString::fromLatin1(ci->message_authentication) == QLatin1String("AEAD")) {
+			// Authenticated Encryption with Associated Data
+			// See https://en.wikipedia.org/wiki/Authenticated_encryption
+			cipherDescription = tr(
+			    "The connection is encrypted and authenticated "
+			    "using %1 and uses %2 as the key exchange mechanism (%3)").arg(
+			        QString::fromLatin1(ci->encryption),
+			        QString::fromLatin1(ci->key_exchange_verbose),
+			        QString::fromLatin1(ci->rfc_name));
+		} else {
+			cipherDescription = tr(
+			    "The connection is encrypted using %1, with %2 "
+			    "for message authentication and %3 as the key "
+			    "exchange mechanism (%4)").arg(
+			        QString::fromLatin1(ci->encryption),
+			        QString::fromLatin1(ci->message_authentication),
+			        QString::fromLatin1(ci->key_exchange_verbose),
+			        QString::fromLatin1(ci->rfc_name));
+		}
+	}
+	if (cipherDescription.isEmpty()) {
+		cipherDescription = tr("The connection is secured by the cipher suite that OpenSSL identifies as %1").arg(qsc.name());
+	}
+
+	QString cipherPFSInfo;
+	if (ci) {
+		if (ci->forward_secret) {
+			cipherPFSInfo = tr("<p>The connection provides perfect forward secrecy</p>");
+		} else {
+			cipherPFSInfo = tr("<p>The connection does not provide perfect forward secrecy</p>");
+		}
+	}
+
+	QString qsControl = tr(
+	            "<h2>Control channel</h2>"
+	            "<p>The connection uses %1</p>"
+	            "%2"
+	            "%3"
+	            "<p>%4 ms average latency (%5 deviation)</p>"
+	            "<p>Remote host %6 (port %7)</p>").arg(
+	                  Qt::escape(c->sessionProtocolString()),
+	                  cipherDescription,
+	                  cipherPFSInfo,
 	                  QString::fromLatin1("%1").arg(boost::accumulators::mean(g.sh->accTCP), 0, 'f', 2),
 	                  QString::fromLatin1("%1").arg(sqrt(boost::accumulators::variance(g.sh->accTCP)),0,'f',2),
 	                  Qt::escape(host),
 	                  QString::number(port));
+	if (g.uiMaxUsers) {
+		qsControl += tr("<p>Connected users: %1/%2</p>").arg(ModelItem::c_qhUsers.count()).arg(g.uiMaxUsers);
+	}
+
 	QString qsVoice, qsCrypt, qsAudio;
 
 	if (NetworkConfig::TcpModeEnabled()) {
-		qsVoice = tr("Voice channel is sent over control channel.");
+		qsVoice = tr("Voice channel is sent over control channel");
 	} else {
 		qsVoice = tr("<h2>Voice channel</h2><p>Encrypted with 128 bit OCB-AES128<br />%1 ms average latency (%4 deviation)</p>").arg(boost::accumulators::mean(g.sh->accUDP), 0, 'f', 2).arg(sqrt(boost::accumulators::variance(g.sh->accUDP)),0,'f',2);
 		qsCrypt = QString::fromLatin1("<h2>%1</h2><table><tr><th></th><th>%2</th><th>%3</th></tr>"
@@ -1265,6 +1364,7 @@ void MainWindow::qmUser_aboutToShow() {
 		qmUser->addAction(qaUserPrioritySpeaker);
 	qmUser->addAction(qaUserLocalMute);
 	qmUser->addAction(qaUserLocalIgnore);
+	qmUser->addAction(qaUserLocalVolume);
 
 	if (self)
 		qmUser->addAction(qaSelfComment);
@@ -1321,6 +1421,7 @@ void MainWindow::qmUser_aboutToShow() {
 		qaUserBan->setEnabled(false);
 		qaUserTextMessage->setEnabled(false);
 		qaUserLocalMute->setEnabled(false);
+		qaUserLocalVolume->setEnabled(false);
 		qaUserLocalIgnore->setEnabled(false);
 		qaUserCommentReset->setEnabled(false);
 		qaUserTextureReset->setEnabled(false);
@@ -1330,6 +1431,7 @@ void MainWindow::qmUser_aboutToShow() {
 		qaUserBan->setEnabled(! self);
 		qaUserTextMessage->setEnabled(true);
 		qaUserLocalMute->setEnabled(! self);
+		qaUserLocalVolume->setEnabled(! self);
 		qaUserLocalIgnore->setEnabled(! self);
 		qaUserCommentReset->setEnabled(! p->qbaCommentHash.isEmpty() && (g.pPermissions & (ChanACL::Move | ChanACL::Write)));
 		qaUserTextureReset->setEnabled(! p->qbaTextureHash.isEmpty() && (g.pPermissions & (ChanACL::Move | ChanACL::Write)));
@@ -1384,6 +1486,20 @@ void MainWindow::on_qaUserLocalIgnore_triggered() {
 	p->setLocalIgnore(ignored);
 	if (! p->qsHash.isEmpty())
 		Database::setLocalIgnored(p->qsHash, ignored);
+}
+
+void MainWindow::on_qaUserLocalVolume_triggered() {
+	ClientUser *p = getContextMenuUser();
+	if (!p) {
+		return;
+	}
+	openUserLocalVolumeDialog(p);
+}
+
+void MainWindow::openUserLocalVolumeDialog(ClientUser *p) {
+	unsigned int session = p->uiSession;
+	UserLocalVolumeDialog *uservol = new UserLocalVolumeDialog(session);
+	uservol->show();
 }
 
 void MainWindow::on_qaUserDeaf_triggered() {
@@ -1725,8 +1841,8 @@ void MainWindow::qmChannel_aboutToShow() {
 			qmChannel->addAction(a);
 	}
 
-	bool add, remove, acl, link, unlink, unlinkall, msg, hide;
-	add = remove = acl = link = unlink = unlinkall = msg = hide = false;
+	bool add, remove, acl, link, unlink, unlinkall, msg;
+	add = remove = acl = link = unlink = unlinkall = msg = false;
 
 	if (g.uiSession != 0) {
 		add = true;
@@ -2142,7 +2258,7 @@ void MainWindow::on_qaConfigDialog_triggered() {
 	// stylesheet set.  Also, the Mac dialog doesn't work when embedded
 	// inside the interactive overlay, so there we always force a regular
 	// ConfigDialog.
-	if (! g.ocIntercept && (g.qsCurrentStyle == QLatin1String("Macintosh (aqua)") || g.qsCurrentStyle.isEmpty())  && g.s.qsSkin.isEmpty())
+	if (! g.ocIntercept && !Themes::getConfiguredStyle(g.s))
 		dlg = new ConfigDialogMac(this);
 #endif
 	if (! dlg)
@@ -2155,6 +2271,20 @@ void MainWindow::on_qaConfigDialog_triggered() {
 
 		UserModel *um = static_cast<UserModel *>(qtvUsers->model());
 		um->toggleChannelFiltered(NULL); // force a UI refresh
+		
+		if (g.s.requireRestartToApply) {
+			if (g.s.requireRestartToApply && QMessageBox::question(
+				        this,
+				        tr("Restart Mumble?"),
+				        tr("Some settings will only apply after a restart of Mumble. Restart Mumble now?"),
+				        QMessageBox::Yes | QMessageBox::No) == QMessageBox::Yes) {
+		
+				bSuppressAskOnQuit = true;
+				restartOnQuit = true;
+				
+				close();
+			}
+		}
 	}
 
 	delete dlg;
@@ -2162,6 +2292,7 @@ void MainWindow::on_qaConfigDialog_triggered() {
 
 void MainWindow::on_qaConfigMinimal_triggered() {
 	g.s.bMinimalView = qaConfigMinimal->isChecked();
+	updateWindowTitle();
 	setupView();
 }
 
@@ -2229,7 +2360,7 @@ void MainWindow::on_PushToTalk_triggered(bool down, QVariant) {
 		g.uiDoublePush = g.tDoublePush.restart();
 		g.iPushToTalk++;
 	} else if (g.iPushToTalk > 0) {
-		QTimer::singleShot(g.s.uiPTTHold, this, SLOT(pttReleased()));
+		QTimer::singleShot(static_cast<int>(g.s.pttHold), this, SLOT(pttReleased()));
 	}
 }
 
@@ -2422,7 +2553,7 @@ void MainWindow::on_gsWhisper_triggered(bool down, QVariant scdata) {
 	} else if (g.iPushToTalk > 0) {
 		SignalCurry *fwd = new SignalCurry(scdata, true, this);
 		connect(fwd, SIGNAL(called(QVariant)), SLOT(whisperReleased(QVariant)));
-		QTimer::singleShot(g.s.uiPTTHold, fwd, SLOT(call()));
+		QTimer::singleShot(static_cast<int>(g.s.pttHold), fwd, SLOT(call()));
 	}
 }
 
@@ -2449,7 +2580,7 @@ void MainWindow::removeTarget(ShortcutTarget *st)
 		qmCurrentTargets[*st] -= 1;
 }
 
-void MainWindow::on_gsCycleTransmitMode_triggered(bool down, QVariant scdata) 
+void MainWindow::on_gsCycleTransmitMode_triggered(bool down, QVariant)
 {
 	if (down) 
 	{
@@ -2552,6 +2683,7 @@ void MainWindow::serverConnected() {
 	g.bAllowHTML = true;
 	g.uiMessageLength = 5000;
 	g.uiImageLength = 131072;
+	g.uiMaxUsers = 0;
 
 	if (g.s.bMute || g.s.bDeaf) {
 		g.sh->setSelfMuteDeafState(g.s.bMute, g.s.bDeaf);

@@ -4,6 +4,31 @@ DEFINES		*= MUMBLE
 TEMPLATE	= app
 TARGET		= mumble
 
+!CONFIG(qt4-legacy-compat) {
+  CONFIG += no-qt4-legacy-compat
+}
+
+CONFIG(no-qt4-legacy-compat):isEqual(QT_MAJOR_VERSION, 4) {
+  error("$$escape_expand(\\n)$$escape_expand(\\n)"\
+        "Mumble client support for Qt 4 is deprecated and will be dropped$$escape_expand(\\n)"\
+        "completely in the future. We highly recommend switching to$$escape_expand(\\n)"\
+        "building Mumble with Qt 5. For now CONFIG+=qt4-legacy-compat$$escape_expand(\\n)"\
+        "can be used to build with Qt 4. Note that if built this way,$$escape_expand(\\n)"\
+        "Mumble might lack certain bug-fixes and capabilities available$$escape_expand(\\n)"\
+        "when built with Qt 5.$$escape_expand(\\n)"\
+        "$$escape_expand(\\n)")
+}
+
+isEqual(QT_MAJOR_VERSION, 4) {
+  warning("$$escape_expand(\\n)$$escape_expand(\\n)"\
+          "Mumble client support for Qt 4 is deprecated and will be dropped$$escape_expand(\\n)"\
+          "completely in the future. We highly recommend switching to$$escape_expand(\\n)"\
+          "building Mumble with Qt 5. When built with Qt 4, Mumble might$$escape_expand(\\n)"\
+          "lack certain bug-fixes and capabilities available when built$$escape_expand(\\n)"\
+          "with Qt 5 already.$$escape_expand(\\n)"\
+          "$$escape_expand(\\n)")
+}
+
 CONFIG(static) {
   # On Windows, building a static client
   # means building the main app into a DLL.
@@ -104,6 +129,7 @@ HEADERS *= BanEditor.h \
     ClientUser.h \
     UserEdit.h \
     UserListModel.h \
+    UserLocalVolumeDialog.h \
     Tokens.h \
     UserView.h \
     RichTextEditor.h \
@@ -120,7 +146,10 @@ HEADERS *= BanEditor.h \
     OverlayEditor.h \
     OverlayEditorScene.h \
     MumbleApplication.h \
-    ApplicationPalette.h
+    ApplicationPalette.h \
+    ThemeInfo.h \
+    Themes.h \
+    OverlayPositionableItem.h
 
 SOURCES *= BanEditor.cpp \
     ACLEditor.cpp \
@@ -171,6 +200,7 @@ SOURCES *= BanEditor.cpp \
     ClientUser.cpp \
     UserEdit.cpp \
     UserListModel.cpp \
+    UserLocalVolumeDialog.cpp \
     Tokens.cpp \
     UserView.cpp \
     RichTextEditor.cpp \
@@ -180,10 +210,13 @@ SOURCES *= BanEditor.cpp \
     VoiceRecorderDialog.cpp \
     WebFetch.cpp \
     MumbleApplication.cpp \
-    smallft.cpp
+    smallft.cpp \
+    ThemeInfo.cpp \
+    Themes.cpp \
+    OverlayPositionableItem.cpp
 
 DIST		*= ../../icons/mumble.ico licenses.h smallft.h ../../icons/mumble.xpm murmur_pch.h mumble.plist
-RESOURCES	*= mumble.qrc mumble_translations.qrc mumble_flags.qrc
+RESOURCES	*= mumble.qrc mumble_translations.qrc mumble_flags.qrc ../../themes/MumbleTheme.qrc
 FORMS *= ConfigDialog.ui \
     MainWindow.ui \
     ConnectDialog.ui \
@@ -206,6 +239,7 @@ FORMS *= ConfigDialog.ui \
     GlobalShortcutTarget.ui \
     Cert.ui \
     UserEdit.ui \
+    UserLocalVolumeDialog.ui \
     AudioWizard.ui \
     Tokens.ui \
     RichTextEditor.ui \
@@ -243,7 +277,7 @@ isEmpty(QMAKE_LRELEASE) {
   }
 }
 
-unix:!CONFIG(bundled-speex):system(pkg-config --atleast-version=1.2 speexdsp) {
+unix:!CONFIG(bundled-speex):system(pkg-config --atleast-version=1.2 speexdsp):system(pkg-config --atleast-version=1.2 speex) {
   CONFIG	*= no-bundled-speex
 }
 
@@ -265,7 +299,7 @@ CONFIG(no-bundled-speex) {
 }
 
 !CONFIG(no-bundled-speex) {
-  INCLUDEPATH	*= ../../3rdparty/speex-src/include ../../3rdparty/speex-src/libspeex ../../3rdparty/speex-build
+  INCLUDEPATH	*= ../../3rdparty/speex-src/include ../../3rdparty/speex-src/libspeex ../../3rdparty/speex-build ../../3rdparty/speexdsp-src/include ../../3rdparty/speexdsp-src/libspeexdsp
   LIBS 		*= -lspeex
 }
 
@@ -281,21 +315,25 @@ CONFIG(sbcelt) {
   }
   CONFIG(no-bundled-celt) {
     INCLUDEPATH	*= /usr/include/celt
+    unix {
+      QMAKE_CFLAGS *= "-isystem /usr/include/celt"
+      QMAKE_CXXFLAGS *= "-isystem /usr/include/celt"
+    }
   }
   !CONFIG(no-bundled-celt) {
-    INCLUDEPATH	*= ../../3rdparty/celt-0.7.0-src/libcelt
+    INCLUDEPATH *= ../../3rdparty/celt-0.7.0-src/libcelt
+    unix {
+      QMAKE_CFLAGS *= "-isystem ../../3rdparty/celt-0.7.0-src/libcelt"
+      QMAKE_CXXFLAGS *= "-isystem ../../3rdparty/celt-0.7.0-src/libcelt"
+    }
   }
-}
-
-!win32 {
-  QMAKE_CXXFLAGS	*= -Wall -Wextra
 }
 
 !win32:!macx:!CONFIG(no-dbus) {
   CONFIG		*= dbus
 }
 
-!CONFIG(no-g15) {
+!freebsd:!CONFIG(no-g15) {
   CONFIG *= g15
 }
 
@@ -319,6 +357,10 @@ unix:!CONFIG(bundled-opus):system(pkg-config --exists opus) {
     INCLUDEPATH *= ../../3rdparty/opus-src/celt ../../3rdparty/opus-src/include ../../3rdparty/opus-src/src ../../3rdparty/opus-build/src
     DEFINES *= USE_OPUS
     LIBS *= -lopus
+    unix {
+      QMAKE_CFLAGS *= "-isystem  ../../3rdparty/opus-src/celt" "-isystem ../../3rdparty/opus-src/include"
+      QMAKE_CXXFLAGS *= "-isystem  ../../3rdparty/opus-src/celt" "-isystem ../../3rdparty/opus-src/include"
+    }
   }
 }
 
@@ -331,7 +373,7 @@ win32 {
   HEADERS	*= GlobalShortcut_win.h Overlay_win.h TaskList.h
   SOURCES	*= GlobalShortcut_win.cpp TextToSpeech_win.cpp Overlay_win.cpp SharedMemory_win.cpp Log_win.cpp os_win.cpp TaskList.cpp ../../overlay/HardHook.cpp ../../overlay/ods.cpp
   LIBS		*= -ldxguid -ldinput8 -lsapi -lole32 -lws2_32 -ladvapi32 -lwintrust -ldbghelp -llibsndfile-1 -lshell32 -lshlwapi -luser32 -lgdi32 -lpsapi
-  LIBS		*= -ldelayimp -delayload:speex.dll -delayload:shell32.dll
+  LIBS		*= -ldelayimp -delayload:shell32.dll
 
   equals(QMAKE_TARGET.arch, x86_64) {
     DEFINES += USE_MINHOOK
@@ -348,6 +390,24 @@ win32 {
   }
   !CONFIG(no-wasapi) {
     CONFIG	*= wasapi
+  }
+  !CONFIG(no-gkey) {
+    CONFIG *= gkey
+  }
+
+  CONFIG(gkey) {
+    HEADERS *= GKey.h
+    SOURCES *= GKey.cpp
+    DEFINES *= USE_GKEY
+  }
+
+  !CONFIG(no-xboxinput) {
+    CONFIG *= xboxinput
+  }
+  CONFIG(xboxinput) {
+    HEADERS *= XboxInput.h
+    SOURCES *= XboxInput.cpp
+    DEFINES *= USE_XBOXINPUT
   }
 
   !CONFIG(mumble_dll) {
@@ -382,7 +442,7 @@ unix {
 
   CONFIG *= link_pkgconfig
 
-  PKGCONFIG *= openssl sndfile
+  PKGCONFIG *= sndfile
 
   macx {
     TARGET = Mumble
@@ -411,7 +471,7 @@ unix {
         LIBS += -lxar
       }
 
-      LIBS += -framework ScriptingBridge 
+      LIBS += -framework ScriptingBridge
       OBJECTIVE_SOURCES += Overlay_macx.mm
     } else {
       SOURCES += Overlay_unix.cpp
@@ -500,7 +560,7 @@ bonjour {
 
 dbus {
 	DEFINES *= USE_DBUS
-	CONFIG *= qdbus
+	QT *= dbus
 	HEADERS *= DBus.h
 	SOURCES *= DBus.cpp
 }
@@ -512,6 +572,7 @@ speechd {
 		PKGCONFIG *= speech-dispatcher
 	} else {
 		LIBS *= -lspeechd
+		INCLUDEPATH	*= /usr/include/speech-dispatcher
 	}
 }
 
@@ -531,13 +592,14 @@ wasapi {
 
 g15 {
 	DEFINES *= USE_G15
-	unix:!macx {
+	win32|macx {
+		SOURCES *= G15LCDEngine_helper.cpp
+		HEADERS *= G15LCDEngine_helper.h ../../g15helper/g15helper.h
+	}
+	unix:!macx:!freebsd {
 		SOURCES *= G15LCDEngine_unix.cpp
 		HEADERS *= G15LCDEngine_unix.h
 		LIBS *= -lg15daemon_client
-	} else {
-		SOURCES *= G15LCDEngine_helper.cpp
-		HEADERS *= G15LCDEngine_helper.h ../../g15helper/g15helper.h
 	}
 }
 
@@ -545,32 +607,45 @@ CONFIG(no-update) {
 	DEFINES *= NO_UPDATE_CHECK
 }
 
+!CONFIG(no-embed-qt-translations):!exists($$[QT_INSTALL_TRANSLATIONS]) {
+  error("$$escape_expand(\\n)$$escape_expand(\\n)"\
+        "The QT_INSTALL_TRANSLATIONS directory ($$[QT_INSTALL_TRANSLATIONS])$$escape_expand(\\n)"\
+	"does not exist.$$escape_expand(\\n)"\
+	"$$escape_expand(\\n)"\
+	"The Mumble build process is attempting to embed Qt translations into the Mumble binary,$$escape_expand(\\n)"\
+	"but it cannot, because the files are missing.$$escape_expand(\\n)"\
+	"$$escape_expand(\\n)"\
+	"If you wish to embed Qt translations into the Mumble binary,$$escape_expand(\\n)"\
+	"you will need to install the translation package for your verison of Qt.$$escape_expand(\\n)"\
+	"For example, On Ubuntu with Qt 5, that package is 'qttranslations5-l10n'.$$escape_expand(\\n)"\
+	"$$escape_expand(\\n)"\
+	"You can also tell the Mumble build process to not embed Qt's$$escape_expand(\\n)"\
+	"translations into the Mumble binary by using the 'no-embed-qt-translations'$$escape_expand(\\n)"\
+	"CONFIG option when running qmake, such as:$$escape_expand(\\n)"\
+	"$$escape_expand(\\n)"\
+	"    $ qmake -recursive main.pro CONFIG+=$$escape_expand(\")no-embed-qt-translations$$escape_expand(\")$$escape_expand(\\n)"\
+	"$$escape_expand(\\n)"\
+	"Please refer to the INSTALL file at the root of the source tree for more information$$escape_expand(\\n)"\
+	"about the build process.$$escape_expand(\\n)"\
+        "$$escape_expand(\\n)")
+}
+
 !CONFIG(no-embed-qt-translations) {
-	# Add additional 3rd party Qt translations not shipped with Qt
-	TRANSLATIONS *= qttranslations/qt_it.ts qttranslations/qt_nl.ts qttranslations/qt_tr.ts
-	DEFINES *= USING_BUNDLED_QT_TRANSLATIONS
-
-	# Add translations shipped with Qt
-	QT_TRANSDIR = $$[QT_INSTALL_TRANSLATIONS]/
-	QT_TRANSDIR = $$replace(QT_TRANSDIR,/,$${DIR_SEPARATOR})
-
-	QT_TRANSDIR = $$[QT_INSTALL_TRANSLATIONS]/
-	QT_TRANSDIR = $$replace(QT_TRANSDIR,/,$${DIR_SEPARATOR})
-
-	QT_TRANSLATION_FILES_SRC *= qt_cs.qm qt_da.qm qt_de.qm qt_es.qm qt_fr.qm qt_he.qm qt_hu.qm qt_ja.qm qt_pl.qm qt_pt.qm qt_ru.qm qt_sv.qm qt_zh_CN.qm qt_zh_TW.qm
-	for(lang, QT_TRANSLATION_FILES_SRC):exists($$[QT_INSTALL_TRANSLATIONS]/$${lang}) {
-		QT_TRANSLATION_FILES *= $${lang}
+	QT_TRANSLATIONS_FALLBACK_DIR = qttranslations
+	QT_TRANSLATIONS_FALLBACK_FILES = $$files($$QT_TRANSLATIONS_FALLBACK_DIR/*.ts)
+	for(fn, QT_TRANSLATIONS_FALLBACK_FILES) {
+		!system($$QMAKE_LRELEASE -silent $$fn) {
+			error(Failed to run lrelease for $$fn)
+		}
 	}
-
-	copytrans.output = ${QMAKE_FILE_NAME}
-	copytrans.commands = $$QMAKE_COPY $${QT_TRANSDIR}${QMAKE_FILE_NAME} ${QMAKE_FILE_OUT}
-	copytrans.input = QT_TRANSLATION_FILES
-	copytrans.CONFIG *= no_link
-	copytrans.variable_out = rcc.depends
-
-	QMAKE_EXTRA_COMPILERS *= copytrans
-
-	RESOURCES *= mumble_qt.qrc
+	GENQRC = ../../scripts/generate-mumble_qt-qrc.py
+	win32 {
+		GENQRC = python ..\\..\\scripts\\generate-mumble_qt-qrc.py
+	}
+	!system($$GENQRC mumble_qt_auto.qrc $$[QT_INSTALL_TRANSLATIONS] $$QT_TRANSLATIONS_FALLBACK_DIR) {
+		error(Failed to run generate-mumble_qt-qrc.py script)
+	}
+	RESOURCES *= mumble_qt_auto.qrc
 }
 
 !CONFIG(no-embed-tango-icons) {

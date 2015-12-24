@@ -1,13 +1,13 @@
 include(../../compiler.pri)
 
-!exists(../speex-src/COPYING) {
-	message("The speex/ directory was not found. You need to do one of the following:")
+!exists(../speex-src/COPYING) | !exists(../speexdsp-src/COPYING) {
+	message("The speex-src/ or speexdsp-src/ directories were not found. You need to do one of the following:")
 	message("")
 	message("Option 1: Use Speex Git:")
 	message("git submodule init")
 	message("git submodule update")
 	message("")
-	message("Option 2: Use system speex (only if it's a bleeding edge version):")
+	message("Option 2: Use system speex and speex-dsp (v 1.2 or later):")
 	message("qmake CONFIG+=no-bundled-speex -recursive")
 	message("")
 	error("Aborting configuration")
@@ -28,10 +28,10 @@ CONFIG += debug_and_release
 CONFIG -= warn_on
 CONFIG += warn_off
 CONFIG += no_include_pwd
-VPATH	= ../speex-src/libspeex
+VPATH	= ../speex-src/libspeex ../speexdsp-src/libspeexdsp
 TARGET = speex
 DEFINES += NDEBUG HAVE_CONFIG_H
-INCLUDEPATH = ../speex-src/include ../speex-src/libspeex
+INCLUDEPATH = ../speex-src/include ../speex-src/libspeex ../speexdsp-src/include ../speexdsp-src/libspeexdsp
 
 win32 {
   INCLUDEPATH += ../speex-build/win32
@@ -49,13 +49,8 @@ win32 {
     QMAKE_CFLAGS_DEBUG -= -arch:SSE
   }
 
-  !CONFIG(intelcpp) {
-    DEFINES+=USE_SMALLFT
-  } else {
-    LIBS	*= -l"\\Program Files (x86)\\Intel/Compiler\\11.1\\054\\ipp\\ia32\\lib\\ippsemerged"
-    LIBS	*= -l"\\Program Files (x86)\\Intel/Compiler\\11.1\\054\\ipp\\ia32\\lib\\ippsmerged"
-    LIBS	*= -l"\\Program Files (x86)\\Intel/Compiler\\11.1\\054\\ipp\\ia32\\lib\\ippcorel"
-  }
+  DEFINES+=USE_SMALLFT
+
 } else {
   CONFIG += staticlib
   INCLUDEPATH += ../speex-build

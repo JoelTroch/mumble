@@ -50,6 +50,7 @@ ClientUser::ClientUser(QObject *p) : QObject(p),
 		fPowerMin(0.0f),
 		fPowerMax(0.0f),
 		fAverageAvailable(0.0f),
+		fLocalVolume(1.0f),
 		iFrames(0),
 		iSequence(0) {
 }
@@ -117,7 +118,7 @@ void ClientUser::remove(unsigned int uiSession) {
 			ao->removeBuffer(p);
 
 		if (p->tsState != Settings::Passive) {
-			QWriteLocker lock(&c_qrwlTalking);
+			QWriteLocker writeLock(&c_qrwlTalking);
 			c_qlTalking.removeAll(p);
 		}
 	}

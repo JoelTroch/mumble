@@ -114,7 +114,9 @@ public:
 
 	QSslCertificate qscCert;
 	QSslKey qskKey;
+	QByteArray qbaDHParams;
 	QByteArray qbaPassPhrase;
+	QString qsCiphers;
 
 	QMap<QString, QString> qmConfig;
 
@@ -135,8 +137,8 @@ public:
 	void read(QString fname = QString("murmur.ini"));
 
 private:
-		template <class T>
-		T typeCheckedFromSettings(const QString &name, const T &variable);
+	template <class T>
+	T typeCheckedFromSettings(const QString &name, const T &variable);
 };
 
 class Meta : public QObject {

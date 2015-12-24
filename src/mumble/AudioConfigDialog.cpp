@@ -118,7 +118,7 @@ void AudioInputDialog::load(const Settings &r) {
 	loadSlider(qsTransmitMax, iroundf(r.fVADmax * 32767.0f + 0.5f));
 	loadSlider(qsFrames, (r.iFramesPerPacket == 1) ? 1 : (r.iFramesPerPacket/2 + 1));
 	loadSlider(qsDoublePush, iroundf(static_cast<float>(r.uiDoublePush) / 1000.f + 0.5f));
-	loadSlider(qsPTTHold, r.uiPTTHold);
+	loadSlider(qsPTTHold, static_cast<int>(r.pttHold));
 
 	if (r.vsVAD == Settings::Amplitude)
 		qrbAmplitude->setChecked(true);
@@ -157,7 +157,7 @@ void AudioInputDialog::save() const {
 	s.iFramesPerPacket = qsFrames->value();
 	s.iFramesPerPacket = (s.iFramesPerPacket == 1) ? 1 : ((s.iFramesPerPacket-1) * 2);
 	s.uiDoublePush = qsDoublePush->value() * 1000;
-	s.uiPTTHold = qsPTTHold->value();
+	s.pttHold = qsPTTHold->value();
 	s.atTransmit = static_cast<Settings::AudioTransmit>(qcbTransmit->currentIndex());
 
 	// Idle auto actions
@@ -322,9 +322,9 @@ void AudioInputDialog::on_qpbPushClickBrowseOff_clicked() {
 void AudioInputDialog::on_qpbPushClickPreview_clicked() {
 	AudioOutputPtr ao = g.ao;
 	if (ao) {
-		AudioOutputSample *s = ao->playSample(qlePushClickPathOn->text());
-		if (s)
-			connect(s, SIGNAL(playbackFinished()), this, SLOT(continuePlayback()));
+		AudioOutputSample *sample = ao->playSample(qlePushClickPathOn->text());
+		if (sample)
+			connect(sample, SIGNAL(playbackFinished()), this, SLOT(continuePlayback()));
 		else // If we fail to playback the first play on play at least off
 			ao->playSample(qlePushClickPathOff->text());
 
@@ -454,6 +454,13 @@ void AudioOutputDialog::load(const Settings &r) {
 	loadCheckBox(qcbAttenuateOthersOnTalk, r.bAttenuateOthersOnTalk);
 	loadCheckBox(qcbAttenuateOthers, r.bAttenuateOthers);
 	loadCheckBox(qcbAttenuateUsersOnPrioritySpeak, r.bAttenuateUsersOnPrioritySpeak);
+	loadCheckBox(qcbOnlyAttenuateSameOutput, r.bOnlyAttenuateSameOutput);
+	loadCheckBox(qcbAttenuateLoopbacks, r.bAttenuateLoopbacks);
+	if (AudioOutputRegistrar::current == QLatin1String("PulseAudio")) {
+		qgbAdvancedAttenuation->setVisible(true);
+	} else {
+		qgbAdvancedAttenuation->setVisible(false);
+	}
 	loadSlider(qsJitter, r.iJitterBufferSize);
 	loadComboBox(qcbLoopback, r.lmLoopMode);
 	loadSlider(qsPacketDelay, static_cast<int>(r.dMaxPacketDelay));
@@ -467,6 +474,7 @@ void AudioOutputDialog::load(const Settings &r) {
 
 	qsOtherVolume->setEnabled(r.bAttenuateOthersOnTalk || r.bAttenuateOthers);
 	qlOtherVolume->setEnabled(r.bAttenuateOthersOnTalk || r.bAttenuateOthers);
+	qcbAttenuateLoopbacks->setEnabled(r.bOnlyAttenuateSameOutput);
 }
 
 void AudioOutputDialog::save() const {
@@ -475,6 +483,8 @@ void AudioOutputDialog::save() const {
 	s.fOtherVolume = 1.0f - (static_cast<float>(qsOtherVolume->value()) / 100.0f);
 	s.bAttenuateOthersOnTalk = qcbAttenuateOthersOnTalk->isChecked();
 	s.bAttenuateOthers = qcbAttenuateOthers->isChecked();
+	s.bOnlyAttenuateSameOutput = qcbOnlyAttenuateSameOutput->isChecked();
+	s.bAttenuateLoopbacks = qcbAttenuateLoopbacks->isChecked();
 	s.bAttenuateUsersOnPrioritySpeak = qcbAttenuateUsersOnPrioritySpeak->isChecked();
 	s.iJitterBufferSize = qsJitter->value();
 	s.qsAudioOutput = qcbSystem->currentText();
@@ -522,6 +532,11 @@ void AudioOutputDialog::on_qcbSystem_currentIndexChanged(int) {
 		bool canmute = aor->canMuteOthers();
 		qsOtherVolume->setEnabled(canmute);
 		qcbAttenuateOthersOnTalk->setEnabled(canmute);
+		if (aor->name == QLatin1String("PulseAudio")) {
+			qgbAdvancedAttenuation->setVisible(true);
+		} else {
+			qgbAdvancedAttenuation->setVisible(false);
+		}
 		qcbAttenuateOthers->setEnabled(canmute);
 		qlOtherVolume->setEnabled(canmute);
 
@@ -605,10 +620,16 @@ void AudioOutputDialog::on_qcbAttenuateOthersOnTalk_clicked(bool checked) {
 	bool b = qcbAttenuateOthers->isChecked() || checked;
 	qsOtherVolume->setEnabled(b);
 	qlOtherVolume->setEnabled(b);
+	qgbAdvancedAttenuation->setEnabled(b);
 }
 
 void AudioOutputDialog::on_qcbAttenuateOthers_clicked(bool checked) {
 	bool b = qcbAttenuateOthersOnTalk->isChecked() || checked;
 	qsOtherVolume->setEnabled(b);
 	qlOtherVolume->setEnabled(b);
+	qgbAdvancedAttenuation->setEnabled(b);
+}
+
+void AudioOutputDialog::on_qcbOnlyAttenuateSameOutput_clicked(bool checked) {
+	qcbAttenuateLoopbacks->setEnabled(checked);
 }

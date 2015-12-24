@@ -5,9 +5,6 @@
 #define WIN32_LEAN_AND_MEAN
 
 #define _USE_MATH_DEFINES
-#if defined(__INTEL_COMPILER)
-#include <mathimf.h>
-#endif
 
 #ifdef __APPLE__
 #include <CoreFoundation/CoreFoundation.h>
@@ -39,15 +36,6 @@ extern "C" {
 	void __cpuid(int a[4], int b);
 };
 #endif
-
-#include <openssl/aes.h>
-#include <openssl/rand.h>
-#include <openssl/pem.h>
-#include <openssl/conf.h>
-#include <openssl/x509v3.h>
-#include <openssl/err.h>
-/* OpenSSL defines set_key. This breaks our protobuf-generated setters. */
-#undef set_key
 
 #ifdef Q_OS_UNIX
 #include <stdio.h>
@@ -83,11 +71,9 @@ extern "C" {
 #endif
 #endif
 
-#if !defined (Q_CC_INTEL) && !defined (Q_OS_WIN)
 #include <math.h>
-#endif
-#if defined (Q_OS_WIN) && (defined (Q_CC_INTEL) || defined (Q_CC_MSVC))
-#define lroundf(x) ( static_cast<int>( (x) + ((x) >= 0 ? 0.5 : -0.5) ) )
+
+#if defined (Q_OS_WIN)
 #define snprintf ::_snprintf
 #define STACKVAR(type, varname, count) type *varname=reinterpret_cast<type *>(_alloca(sizeof(type) * (count)))
 #else
@@ -102,6 +88,16 @@ extern "C" {
 #ifdef USE_BONJOUR
 #include <dns_sd.h>
 #endif
+
+#include <openssl/aes.h>
+#include <openssl/rand.h>
+#include <openssl/pem.h>
+#include <openssl/conf.h>
+#include <openssl/x509v3.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+/* OpenSSL defines set_key. This breaks our protobuf-generated setters. */
+#undef set_key
 
 #endif
 #endif

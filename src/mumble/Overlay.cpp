@@ -92,7 +92,17 @@ Overlay::Overlay() : QObject() {
 #ifdef Q_OS_WIN
 	pipepath = QLatin1String("MumbleOverlayPipe");
 #else
-	pipepath = QDir::home().absoluteFilePath(QLatin1String(".MumbleOverlayPipe"));
+	{
+		QString xdgRuntimePath = QProcessEnvironment::systemEnvironment().value(QLatin1String("XDG_RUNTIME_DIR"));
+		QDir xdgRuntimeDir = QDir(xdgRuntimePath);
+
+		if (! xdgRuntimePath.isNull() && xdgRuntimeDir.exists()) {
+			pipepath = xdgRuntimeDir.absoluteFilePath(QLatin1String("MumbleOverlayPipe"));
+		} else {
+			pipepath = QDir::home().absoluteFilePath(QLatin1String(".MumbleOverlayPipe"));
+		}
+	}
+
 	{
 		QFile f(pipepath);
 		if (f.exists()) {
@@ -118,7 +128,14 @@ Overlay::~Overlay() {
 
 	// Need to be deleted first, since destructor references lingering QLocalSockets
 	foreach(OverlayClient *oc, qlClients)
+	{
+		// As we're the one closing the connection, we do not need to be
+		// notified of disconnects. This is important because on disconnect we
+		// also remove (and 'delete') the overlay client.
+		disconnect(oc->qlsSocket, SIGNAL(disconnected()), this, SLOT(disconnected()));
+		disconnect(oc->qlsSocket, SIGNAL(error(QLocalSocket::LocalSocketError)), this, SLOT(error(QLocalSocket::LocalSocketError)));
 		delete oc;
+	}
 }
 
 void Overlay::newConnection() {
@@ -170,7 +187,7 @@ void Overlay::toggleShow() {
 				ProcessSerialNumber psn;
 				GetFrontProcess(&psn);
 				GetProcessPID(&psn, &pid);
-				if (pid != oc->uiPid)
+				if (static_cast<quint64>(pid) != oc->uiPid)
 					continue;
 #if 0
 				// Fullscreen only.

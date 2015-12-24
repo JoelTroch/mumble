@@ -73,6 +73,41 @@ void ExecEvent::execute() {
 SslServer::SslServer(QObject *p) : QTcpServer(p) {
 }
 
+bool SslServer::hasDualStackSupport() {
+	// Create a AF_INET6 socket and try to switch off IPV6_V6ONLY. This
+	// should only fail if the system does not support dual-stack mode
+	// for this socket type.
+
+	bool result = false;
+#ifdef Q_OS_UNIX
+	int s = ::socket(AF_INET6, SOCK_STREAM, 0);
+#else
+	WSADATA wsaData;
+	WORD wVersionRequested = MAKEWORD(2, 2);
+	if (WSAStartup(wVersionRequested, &wsaData) != 0) {
+		// Seems like we won't be doing any network stuff anyways
+		return false;
+	}
+
+	SOCKET s = ::WSASocket(AF_INET6, SOCK_STREAM, IPPROTO_TCP, NULL, 0, WSA_FLAG_OVERLAPPED);
+#endif
+
+	if (s != -1) { // Equals INVALID_SOCKET
+		const int ipv6only = 0;
+		if (setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&ipv6only), sizeof(ipv6only)) == 0) {
+			result = true;
+		}
+#ifdef Q_OS_UNIX
+		::close(s);
+	}
+#else
+		closesocket(s);
+	}
+	WSACleanup();
+#endif
+	return result;
+}
+
 #if QT_VERSION >= 0x050000
 void SslServer::incomingConnection(qintptr v) {
 #else
@@ -132,7 +167,7 @@ Server::Server(int snum, QObject *p) : QThread(p) {
 	foreach(SslServer *ss, qlServer) {
 		sockaddr_storage addr;
 #ifdef Q_OS_UNIX
-		int tcpsock = ss->socketDescriptor();
+		int tcpsock = static_cast<int>(ss->socketDescriptor());
 		socklen_t len = sizeof(addr);
 #else
 		SOCKET tcpsock = ss->socketDescriptor();
@@ -166,6 +201,20 @@ Server::Server(int snum, QObject *p) : QThread(p) {
 			bValid = false;
 			return;
 		} else {
+			if (addr.ss_family == AF_INET6) {
+				// Copy IPV6_V6ONLY attribute from tcp socket, it defaults to nonzero on Windows
+				// See https://msdn.microsoft.com/en-us/library/windows/desktop/ms738574%28v=vs.85%29.aspx
+				// This will fail for WindowsXP which is ok. Our TCP code will have split that up
+				// into two sockets.
+				int ipv6only = 0;
+				socklen_t optlen = sizeof(ipv6only);
+				if (::getsockopt(tcpsock, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<char*>(&ipv6only), &optlen) == 0) {
+					if (::setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<const char*>(&ipv6only), optlen) == SOCKET_ERROR) {
+						log(QString("Failed to copy IPV6_V6ONLY socket attribute from tcp to udp socket"));
+					}
+				}
+			}
+
 			if (::bind(sock, reinterpret_cast<sockaddr *>(&addr), len) == SOCKET_ERROR) {
 				log(QString("Failed to bind UDP Socket to %1").arg(addressToString(ss->serverAddress(), usPort)));
 			} else {
@@ -437,6 +486,10 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 		for (int id = 1; id < iMaxUsers * 2; ++id)
 			if (!qhUsers.contains(id))
 				qqIds.enqueue(id);
+
+		MumbleProto::ServerConfig mpsc;
+		mpsc.set_max_users(iMaxUsers);
+		sendAll(mpsc);
 	} else if (key == "usersperchannel")
 		iMaxUsersPerChannel = i ? i : Meta::mp.iMaxUsersPerChannel;
 	else if (key == "textmessagelength") {
@@ -471,11 +524,9 @@ void Server::setLiveConf(const QString &key, const QString &value) {
 		QString text = !v.isNull() ? v : Meta::mp.qsWelcomeText;
 		if (text != qsWelcomeText) {
 			qsWelcomeText = text;
-			if (! qsWelcomeText.isEmpty()) {
-				MumbleProto::ServerConfig mpsc;
-				mpsc.set_welcome_text(u8(qsWelcomeText));
-				sendAll(mpsc);
-			}
+			MumbleProto::ServerConfig mpsc;
+			mpsc.set_welcome_text(u8(qsWelcomeText));
+			sendAll(mpsc);
 		}
 	} else if (key == "registername") {
 		QString text = !v.isNull() ? v : Meta::mp.qsRegName;
@@ -708,6 +759,7 @@ void Server::run() {
 				msg.msg_controllen = sizeof(controldata);
 
 				len=static_cast<quint32>(::recvmsg(sock, &msg, MSG_TRUNC));
+				Q_UNUSED(fromlen);
 #else
 				len=static_cast<qint32>(::recvfrom(sock, encrypt, UDP_PACKET_SIZE, MSG_TRUNC, reinterpret_cast<struct sockaddr *>(&from), &fromlen));
 #endif
@@ -854,7 +906,7 @@ void Server::sendMessage(ServerUser *u, const char *data, int len, QByteArray &c
 
 		memset(&msg, 0, sizeof(msg));
 		msg.msg_name = reinterpret_cast<struct sockaddr *>(& u->saiUdpAddress);
-		msg.msg_namelen = (u->saiUdpAddress.ss_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in);
+		msg.msg_namelen = static_cast<socklen_t>((u->saiUdpAddress.ss_family == AF_INET6) ? sizeof(struct sockaddr_in6) : sizeof(struct sockaddr_in));
 		msg.msg_iov = iov;
 		msg.msg_iovlen = 1;
 		msg.msg_control = controldata;
@@ -1113,7 +1165,7 @@ void Server::newClient() {
 
 		foreach(const Ban &ban, qlBans) {
 			if (ban.haAddress.match(ha, ban.iMask)) {
-				log(QString("Ignoring connection: %1 (Server ban)").arg(addressToString(sock->peerAddress(), sock->peerPort())));
+				log(QString("Ignoring connection: %1, Reason: %2, Username: %3, Hash: %4 (Server ban)").arg(addressToString(sock->peerAddress(), sock->peerPort()), ban.qsReason, ban.qsUsername, ban.qsHash));
 				sock->disconnectFromHost();
 				sock->deleteLater();
 				return;
@@ -1124,6 +1176,12 @@ void Server::newClient() {
 		sock->setLocalCertificate(qscCert);
 		sock->addCaCertificate(qscCert);
 		sock->addCaCertificates(qlCA);
+
+#if defined(USE_QSSLDIFFIEHELLMANPARAMETERS)
+		QSslConfiguration cfg = sock->sslConfiguration();
+		cfg.setDiffieHellmanParameters(qsdhpDHParams);
+		sock->setSslConfiguration(cfg);
+#endif
 
 		if (qqIds.isEmpty()) {
 			log(QString("Session ID pool (%1) empty, rejecting connection").arg(iMaxUsers));
@@ -1215,7 +1273,7 @@ void Server::encrypted() {
 
 		foreach(const Ban &ban, qlBans) {
 			if (ban.qsHash == uSource->qsHash) {
-				log(uSource, QString("Certificate hash is banned."));
+				log(uSource, QString("Certificate hash is banned: %1, Username: %2, Reason: %3.").arg(ban.qsHash, ban.qsUsername, ban.qsReason));
 				uSource->disconnectSocket();
 			}
 		}
@@ -1872,9 +1930,22 @@ bool Server::isTextAllowed(QString &text, bool &changed) {
 	}
 }
 
+bool Server::isChannelFull(Channel *c, ServerUser *u) {
+	if (u && hasPermission(u, c, ChanACL::Write)) {
+		return false;
+	}
+	if (c->uiMaxUsers) {
+		return static_cast<unsigned int>(c->qlUsers.count()) >= c->uiMaxUsers;
+	}
+	if (iMaxUsersPerChannel) {
+		return c->qlUsers.count() >= iMaxUsersPerChannel;
+	}
+	return false;
+}
+
 bool Server::canNest(Channel *newParent, Channel *channel) const {
-	const int parentLevel = newParent ? newParent->getLevel() : -1;
-	const int channelDepth = channel ? channel->getDepth() : 0;
+	const int parentLevel = newParent ? static_cast<int>(newParent->getLevel()) : -1;
+	const int channelDepth = channel ? static_cast<int>(channel->getDepth()) : 0;
 
 	return (parentLevel + channelDepth) < iChannelNestingLimit;
 }

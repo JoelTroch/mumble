@@ -32,6 +32,13 @@ CONFIG(sbcelt) {
 	}
 }
 
+!CONFIG(third-party-warnings) {
+	# We ignore warnings in third party builds. We won't actually look
+	# at them and they clutter out our warnings.
+	CONFIG -= warn_on
+	CONFIG += warn_off
+}
+
 QMAKE_CFLAGS -= -fPIE -pie
 
 win32 {
@@ -47,6 +54,10 @@ win32 {
 }
 
 unix {
+	contains(QMAKE_CFLAGS, -ffast-math) {
+		DEFINES += FLOAT_APPROX
+	}
+
 	INCLUDEPATH += ../$$BUILDDIR
 }
 

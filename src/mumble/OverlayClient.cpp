@@ -31,7 +31,7 @@
 #include "mumble_pch.hpp"
 
 #include "OverlayClient.h"
-
+#include "OverlayPositionableItem.h"
 #include "OverlayEditor.h"
 #include "OverlayText.h"
 #include "User.h"
@@ -43,10 +43,15 @@
 #include "ServerHandler.h"
 #include "MainWindow.h"
 #include "GlobalShortcut.h"
+#include "Themes.h"
 
-OverlayClient::OverlayClient(QLocalSocket *socket, QObject *p) :
-		QObject(p),
-		ougUsers(&g.s.os) {
+OverlayClient::OverlayClient(QLocalSocket *socket, QObject *p)
+	: QObject(p)
+	, framesPerSecond(0)
+	, ougUsers(&g.s.os)
+	, iMouseX(0)
+	, iMouseY(0) {
+	
 	qlsSocket = socket;
 	qlsSocket->setParent(NULL);
 	connect(qlsSocket, SIGNAL(readyRead()), this, SLOT(readyRead()));
@@ -75,13 +80,13 @@ OverlayClient::OverlayClient(QLocalSocket *socket, QObject *p) :
 	qgs.addItem(&ougUsers);
 	ougUsers.show();
 
-	qgpiFPS = new QGraphicsPixmapItem();
+	qgpiFPS = new OverlayPositionableItem(&g.s.os.qrfFps);
 	qgs.addItem(qgpiFPS);
 	qgpiFPS->setPos(g.s.os.qrfFps.x(), g.s.os.qrfFps.y());
 	qgpiFPS->show();
 
 	// Time
-	qgpiTime = new QGraphicsPixmapItem();
+	qgpiTime = new OverlayPositionableItem(&g.s.os.qrfTime);
 	qgs.addItem(qgpiTime);
 	qgpiTime->setPos(g.s.os.qrfTime.x(), g.s.os.qrfTime.y());
 	qgpiTime->show();
@@ -120,11 +125,14 @@ bool OverlayClient::eventFilter(QObject *o, QEvent *e) {
 
 void OverlayClient::updateFPS() {
 	if (g.s.os.bFps) {
-		const BasepointPixmap &pm = OverlayTextLine(QString(QLatin1String("%1")).arg(iroundf(fFps + 0.5f)), g.s.os.qfFps).createPixmap(g.s.os.qcFps);
+		const BasepointPixmap &pm = OverlayTextLine(
+		            QString(QLatin1String("%1")).arg(iroundf(framesPerSecond + 0.5f)),
+		            g.s.os.qfFps).createPixmap(g.s.os.qcFps);
 		qgpiFPS->setPixmap(pm);
 		// offset to use basepoint
 		//TODO: settings are providing a top left anchor, so shift down by ascent
 		qgpiFPS->setOffset(-pm.qpBasePoint + QPoint(0, pm.iAscent));
+		qgpiFPS->updateRender();
 	} else {
 		qgpiFPS->setPixmap(QPixmap());
 	}
@@ -135,6 +143,7 @@ void OverlayClient::updateTime() {
 		const BasepointPixmap &pm = OverlayTextLine(QString(QLatin1String("%1")).arg(QTime::currentTime().toString()), g.s.os.qfFps).createPixmap(g.s.os.qcFps);
 		qgpiTime->setPixmap(pm);
 		qgpiTime->setOffset(-pm.qpBasePoint + QPoint(0, pm.iAscent));
+		qgpiTime->updateRender();
 	} else {
 		qgpiTime->setPixmap(QPixmap());
 	}
@@ -273,8 +282,8 @@ outer:
 		}
 	}
 
-	QEvent event(QEvent::WindowActivate);
-	qApp->sendEvent(&qgs, &event);
+	QEvent activateEvent(QEvent::WindowActivate);
+	qApp->sendEvent(&qgs, &activateEvent);
 
 	QPoint p = QCursor::pos();
 	iMouseX = qBound<int>(0, p.x(), uiWidth-1);
@@ -370,14 +379,7 @@ void OverlayClient::hideGui() {
 #ifdef Q_OS_MAC
 	qApp->setAttribute(Qt::AA_DontUseNativeMenuBar, false);
 	g.mw->setUnifiedTitleAndToolBarOnMac(true);
-	if (! g.qsCurrentStyle.isEmpty()) {
-		qApp->setStyle(g.qsCurrentStyle);
-	} else {
-		// Assume that an empty qsCurrentStyle means "use the aqua theme".
-		// This might not always be the case (for example, the default style
-		// can be changed via the Qt command line argument "-style".
-		qApp->setStyle(QLatin1String("Macintosh (aqua)"));
-	}
+	Themes::apply();
 #endif
 
 	setupScene(false);
@@ -432,7 +434,7 @@ void OverlayClient::readyReadMsgInit(unsigned int length) {
 	om.omh.uiMagic = OVERLAY_MAGIC_NUMBER;
 	om.omh.uiType = OVERLAY_MSGTYPE_SHMEM;
 	om.omh.iLength = key.length();
-	Q_ASSERT(sizeof(om.oms.a_cName) >= key.length()); // Name should be auto-generated and short
+	Q_ASSERT(sizeof(om.oms.a_cName) >= static_cast<size_t>(key.length())); // Name should be auto-generated and short
 	memcpy(om.oms.a_cName, key.constData(), key.length());
 	qlsSocket->write(om.headerbuffer, sizeof(OverlayMsgHeader) + om.omh.iLength);
 
@@ -444,7 +446,7 @@ void OverlayClient::readyReadMsgInit(unsigned int length) {
 
 void OverlayClient::readyRead() {
 	while (true) {
-		unsigned int ready = qlsSocket->bytesAvailable();
+		quint64 ready = static_cast<quint64>(qlsSocket->bytesAvailable());
 
 		if (omMsg.omh.iLength == -1) {
 			if (ready < sizeof(OverlayMsgHeader)) {
@@ -460,7 +462,7 @@ void OverlayClient::readyRead() {
 		}
 
 		if (ready >= static_cast<unsigned int>(omMsg.omh.iLength)) {
-			int length = qlsSocket->read(omMsg.msgbuffer, omMsg.omh.iLength);
+			qint64 length = qlsSocket->read(omMsg.msgbuffer, omMsg.omh.iLength);
 
 			if (length != omMsg.omh.iLength) {
 				disconnect();
@@ -469,7 +471,7 @@ void OverlayClient::readyRead() {
 
 			switch (omMsg.omh.uiType) {
 				case OVERLAY_MSGTYPE_INIT: {
-						readyReadMsgInit(length);
+						readyReadMsgInit(static_cast<unsigned int>(length));
 					}
 					break;
 				case OVERLAY_MSGTYPE_SHMEM: {
@@ -478,7 +480,7 @@ void OverlayClient::readyRead() {
 					}
 					break;
 				case OVERLAY_MSGTYPE_PID: {
-						if (length != sizeof(OverlayMsgPid))
+						if (length != static_cast<qint64>(sizeof(OverlayMsgPid)))
 							break;
 
 						OverlayMsgPid *omp = & omMsg.omp;
@@ -502,7 +504,7 @@ void OverlayClient::readyRead() {
 							break;
 
 						OverlayMsgFps *omf = & omMsg.omf;
-						fFps = omf->fps;
+						framesPerSecond = omf->fps;
 						//qWarning() << "FPS: " << omf->fps;
 
 						Overlay *o = static_cast<Overlay *>(parent());
@@ -550,7 +552,7 @@ void OverlayClient::setupScene(bool show) {
 			qgpiLogo->setPixmap(QPixmap::fromImage(qir.read()));
 
 			QRectF qrf = qgpiLogo->boundingRect();
-			qgpiLogo->setPos(iroundf((uiWidth - qrf.width()) / 2.0f + 0.5f), iroundf((uiHeight - qrf.height()) / 2.0f) + 0.5f);
+			qgpiLogo->setPos(iroundf((uiWidth - qrf.width()) / 2.0f + 0.5f), iroundf((uiHeight - qrf.height()) / 2.0f + 0.5f));
 
 		}
 

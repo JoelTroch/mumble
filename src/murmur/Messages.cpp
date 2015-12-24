@@ -176,6 +176,25 @@ void Server::msgAuthenticate(ServerUser *uSource, MumbleProto::Authenticate &msg
 		ok = false;
 	}
 
+	Channel *lc;
+	if (bRememberChan) {
+		lc = qhChannels.value(readLastChannel(uSource->iId));
+	} else {
+		lc = qhChannels.value(iDefaultChan);
+	}
+
+	if (! lc || ! hasPermission(uSource, lc, ChanACL::Enter) || isChannelFull(lc, uSource)) {
+		lc = qhChannels.value(iDefaultChan);
+		if (! lc || ! hasPermission(uSource, lc, ChanACL::Enter) || isChannelFull(lc, uSource)) {
+			lc = root;
+			if (isChannelFull(lc, uSource)) {
+				reason = QString::fromLatin1("Server channels are full");
+				rtType = MumbleProto::Reject_RejectType_ServerFull;
+				ok = false;
+			}
+		}
+	}
+
 	if (! ok) {
 		log(uSource, QString("Rejected connection from %1: %2")
 			.arg(addressToString(uSource->peerAddress(), uSource->peerPort()), reason));
@@ -257,6 +276,8 @@ void Server::msgAuthenticate(ServerUser *uSource, MumbleProto::Authenticate &msg
 		else if (! c->qsDesc.isEmpty())
 			mpcs.set_description(u8(c->qsDesc));
 
+		mpcs.set_max_users(c->uiMaxUsers);
+
 		sendMessage(uSource, mpcs);
 
 		foreach(c, c->qlChannels)
@@ -277,19 +298,6 @@ void Server::msgAuthenticate(ServerUser *uSource, MumbleProto::Authenticate &msg
 
 	// Transmit user profile
 	MumbleProto::UserState mpus;
-
-	Channel *lc;
-	if (bRememberChan)
-		lc = qhChannels.value(readLastChannel(uSource->iId));
-	else
-		lc = qhChannels.value(iDefaultChan);
-
-	if (! lc || ! hasPermission(uSource, lc, ChanACL::Enter)) {
-		lc = qhChannels.value(iDefaultChan);
-		if (! lc || ! hasPermission(uSource, lc, ChanACL::Enter)) {
-			lc = root;
-		}
-	}
 
 	userEnterChannel(uSource, lc, mpus);
 
@@ -396,6 +404,7 @@ void Server::msgAuthenticate(ServerUser *uSource, MumbleProto::Authenticate &msg
 	mpsc.set_allow_html(bAllowHTML);
 	mpsc.set_message_length(iMaxTextMessageLength);
 	mpsc.set_image_message_length(iMaxImageMessageLength);
+	mpsc.set_max_users(iMaxUsers);
 	sendMessage(uSource, mpsc);
 
 	MumbleProto::SuggestConfig mpsug;
@@ -517,7 +526,7 @@ void Server::msgUserState(ServerUser *uSource, MumbleProto::UserState &msg) {
 			PERM_DENIED(pDstServerUser, c, ChanACL::Enter);
 			return;
 		}
-		if (iMaxUsersPerChannel && (c->qlUsers.count() >= iMaxUsersPerChannel)) {
+		if (isChannelFull(c, uSource)) {
 			PERM_DENIED_FALLBACK(ChannelFull, 0x010201, QLatin1String("Channel is full"));
 			return;
 		}
@@ -898,7 +907,7 @@ void Server::msgChannelState(ServerUser *uSource, MumbleProto::ChannelState &msg
 			return;
 		}
 
-		c = addChannel(p, qsName, msg.temporary(), msg.position());
+		c = addChannel(p, qsName, msg.temporary(), msg.position(), msg.max_users());
 		hashAssign(c->qsDesc, c->qbaDescHash, qsDesc);
 
 		if (uSource->iId >= 0) {
@@ -1059,6 +1068,9 @@ void Server::msgChannelState(ServerUser *uSource, MumbleProto::ChannelState &msg
 		foreach(Channel *l, qlRemove) {
 			removeLink(c, l);
 		}
+
+		if (msg.has_max_users())
+			c->uiMaxUsers = msg.max_users();
 
 		updateChannel(c);
 		emit channelStateChanged(c);
@@ -1471,29 +1483,30 @@ void Server::msgUserList(ServerUser *uSource, MumbleProto::UserList &msg) {
 		for (; it != users.constEnd(); ++it) {
 			// Skip the SuperUser
 			if (it->user_id > 0) {
-				::MumbleProto::UserList_User *u = msg.add_users();
-				u->set_user_id(it->user_id);
-				u->set_name(u8(it->name));
+				::MumbleProto::UserList_User *user = msg.add_users();
+				user->set_user_id(it->user_id);
+				user->set_name(u8(it->name));
 				if (it->last_channel) {
-					u->set_last_channel(*it->last_channel);
+					user->set_last_channel(*it->last_channel);
 				}
-				u->set_last_seen(u8(it->last_active.toString(Qt::ISODate)));
+				user->set_last_seen(u8(it->last_active.toString(Qt::ISODate)));
 			}
 		}
 		sendMessage(uSource, msg);
 	} else {
+		// Update mode
 		for (int i=0; i < msg.users_size(); ++i) {
-			const MumbleProto::UserList_User &u = msg.users(i);
+			const MumbleProto::UserList_User &user = msg.users(i);
 
-			int id = u.user_id();
+			int id = user.user_id();
 			if (id == 0)
 				continue;
 
-			if (! u.has_name()) {
+			if (! user.has_name()) {
 				log(uSource, QString::fromLatin1("Unregistered user %1").arg(id));
 				unregisterUser(id);
 			} else {
-				const QString &name = u8(u.name());
+				const QString &name = u8(user.name());
 				if (validateUserName(name)) {
 					log(uSource, QString::fromLatin1("Renamed user %1 to '%2'").arg(QString::number(id), name));
 
@@ -1502,14 +1515,15 @@ void Server::msgUserList(ServerUser *uSource, MumbleProto::UserList &msg) {
 					setInfo(id, info);
 
 					MumbleProto::UserState mpus;
-					foreach(ServerUser *u, qhUsers) {
-						if (u->iId == id) {
-							u->qsName = name;
-							mpus.set_session(u->uiSession);
+					foreach(ServerUser *serverUser, qhUsers) {
+						if (serverUser->iId == id) {
+							serverUser->qsName = name;
+							mpus.set_session(serverUser->uiSession);
 							break;
 						}
 					}
 					if (mpus.has_session()) {
+						mpus.set_actor(uSource->uiSession);
 						mpus.set_name(u8(name));
 						sendAll(mpus);
 					}

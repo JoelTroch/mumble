@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:util="http://schemas.microsoft.com/wix/UtilExtension">
   <?include "Settings.wxi" ?>
 
   <Product Id="*" Name="$(var.ProductName) $(var.ProductVersion)" Language="!(loc.LANG)" Version="$(var.ProductVersion)" Manufacturer="$(var.ProductManufacturer)" UpgradeCode="$(var.ProductUpgradeCode)">
@@ -15,6 +16,8 @@
       <ProgressText Action="NSISUninstall">Uninstalling old version</ProgressText>
     </UI>
 
+    <util:CloseApplication Id="CloseMumble" RebootPrompt="no" EndSessionMessage="yes" Target="mumble.exe" />
+
     <Property Id="WixShellExecTarget" Value="[#mumble.exe]" />
     <CustomAction Id="LaunchApplication" BinaryKey="WixCA" DllEntry="WixShellExec" Impersonate="yes" />
     <UI>
@@ -29,7 +32,7 @@
       VersionNT > 501 OR (VersionNT = 501 AND ServicePackLevel >= 2) OR (VersionNT = 502 AND ServicePackLevel >= 1)
     </Condition>
 
-    <MajorUpgrade AllowDowngrades='no' AllowSameVersionUpgrades='yes' MigrateFeatures='yes' Schedule='afterInstallExecute' DowngradeErrorMessage='A later version of [ProductName] is already installed.' />
+    <MajorUpgrade AllowDowngrades='no' AllowSameVersionUpgrades='yes' MigrateFeatures='yes' Schedule='afterInstallValidate' DowngradeErrorMessage='A later version of [ProductName] is already installed.' />
 
     <Media Id="1" Cabinet="$(var.ProductName).cab" EmbedCab="yes" CompressionLevel="high" />
 
@@ -41,6 +44,7 @@
     <Property Id="ARPURLINFOABOUT" Value="http://www.mumble.info/" />
     <Property Id="ARPURLUPDATEINFO" Value="http://www.mumble.info/" />
     <Property Id='ARPPRODUCTICON'>mumble.ico</Property>
+    <Property Id="MSIRESTARTMANAGERCONTROL" Value="Disable" />
 
     <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\installer\gpl.rtf" />
     <WixVariable Id="WixUIBannerBmp" Value="$(var.SourceDir)\installer\bannrbmp.bmp" />
@@ -50,10 +54,6 @@
       <Directory Id="$(var.ArchSpecificProgramFilesFolderId)">
         <Directory Id="INSTALLDIR" Name="$(var.ProductName)">
         </Directory>
-
-        <?ifdef MergeModuleDir ?>
-          <Merge Id="VCRedist" SourceFile="$(var.MergeModuleDir)\Microsoft_VC120_CRT_x86.msm" DiskId="1" Language="1033" />
-        <?endif ?>
       </Directory>
 
       <Directory Id="DesktopFolder" />
@@ -99,55 +99,13 @@
     </DirectoryRef>
 
     <ComponentGroup Id="LibrariesCommon">
-      <?ifndef StaticBuild ?>
-        <ComponentGroupRef Id="Qt" />
-
-        <ComponentRef Id="libeay32.dll" />
-        <ComponentRef Id="ssleay32.dll" />
-        <?ifdef ZlibDir ?>
-          <ComponentRef Id="zlib1.dll" />
-        <?endif ?>
-
-        <ComponentRef Id="qt.conf" />
-      <?endif ?>
-
       <ComponentRef Id="licence.txt" />
       <ComponentRef Id="Readme.txt" />
       <ComponentRef Id="Changes.txt" />
       <ComponentRef Id="qt.txt" />
-
-      <ComponentRef Id="dbghelp.dll" />
-
-      <?ifndef StaticBuild ?>
-        <?ifdef ProtoBufDir ?>
-          <ComponentRef Id="libprotobuf.dll" />
-        <?endif ?>
-        <?ifdef MySQLDir ?>
-          <ComponentRef Id="libmysql.dll" />
-        <?endif ?>
-      <?endif ?>
-
-      <?ifdef IntelCppDir ?>
-        <ComponentRef Id="libmmd.dll"/>
-      <?endif ?>
-
-      <?ifdef RedistDirVC12 ?>
-        <ComponentRef Id="msvcp120.dll" />
-        <ComponentRef Id="msvcr120.dll" />
-      <?endif ?>
-
-      <?ifdef D3DCompilerDLL ?>
-        <ComponentRef Id="d3dcompiler_43.dll" />
-        <ComponentRef Id="d3dcompiler_47.dll" />
-      <?endif ?>
     </ComponentGroup>
 
     <Feature Id="Mumble" Title="!(loc.MUMBLE_SEC_MUMBLE)" Description="!(loc.DESC_SectionMumble)" Level="1" AllowAdvertise="no" ConfigurableDirectory="INSTALLDIR" Display="expand">
-      <?ifndef StaticBuild ?>
-        <?ifdef SndFileDir ?>
-          <ComponentRef Id="libsndfile1.dll" />
-        <?endif ?>
-      <?endif ?>
       <ComponentRef Id="speex.dll" />
       <ComponentRef Id="speex.txt" />
 
@@ -164,17 +122,22 @@
         <ComponentRef Id="celt0.0.11.0.sse2.dll" />
         <ComponentRef Id="opus.sse2.dll" />
       <?endif ?>
-      <?ifdef StaticBuild ?>
-        <ComponentRef Id="mumble_app.dll" />
-      <?endif ?>
+      <ComponentRef Id="mumble_app.dll" />
       <ComponentRef Id="mumble.exe" />
       <ComponentRef Id="mumble_ol.dll" />
-      <ComponentRef Id="mumble_ol.exe" />
+      <ComponentRef Id="mumble_ol_helper.exe" />
       <ComponentRef Id="mumble_ol_x64.dll" />
-      <ComponentRef Id="mumble_ol_x64.exe" />
+      <ComponentRef Id="mumble_ol_helper_x64.exe" />
       <?ifdef G15 ?>
         <ComponentRef Id="mumble_g15_helper.exe" />
       <?endif ?>
+
+      <?ifdef RedistDirVC12 ?>
+        <ComponentRef Id="msvcp120.dll" />
+        <ComponentRef Id="msvcr120.dll" />
+      <?endif ?>
+
+      <ComponentRef Id="dbghelp.dll" />
 
       <Feature Id="MumbleDesktopShortcutFeature" Title="!(loc.MUMBLE_SEC_DesktopShortcut)" Description="!(loc.DESC_DesktopShortcut)" InstallDefault="followParent" AllowAdvertise="no">
         <ComponentRef Id="MumbleDesktopShortcutComponent" />
@@ -182,21 +145,18 @@
     </Feature>
 
     <Feature Id="Murmur" Title="!(loc.MUMBLE_SEC_MURMUR)" Description="!(loc.DESC_SectionMurmur)" Level="1000" ConfigurableDirectory="INSTALLDIR" Display="expand">
-      <?ifndef StaticBuild ?>
-        <?ifdef IceDir ?>
-          <ComponentRef Id="bzip2.dll" />
-          <ComponentRef Id="ice34.dll" />
-          <ComponentRef Id="iceutil34.dll" />
-        <?endif ?>
-        <?ifdef DBusDir ?>
-          <ComponentGroupRef Id="DBus" />
-        <?endif ?>
-      <?endif ?>
-
       <ComponentRef Id="murmur.exe" />
       <ComponentRef Id="murmur.ini" />
       <ComponentRef Id="Murmur.ice" />
-      
+
+      <?ifdef VersionSubDir ?>
+        <?ifdef RedistDirVC12 ?>
+          <ComponentRef Id="Murmur_msvcp120.dll" />
+          <ComponentRef Id="Murmur_msvcr120.dll" />
+        <?endif ?>
+        <ComponentRef Id="Murmur_dbghelp.dll" />
+      <?endif ?>
+
       <Feature Id="MurmurDesktopShortcutFeature" Title="!(loc.MUMBLE_SEC_DesktopShortcut)" Description="!(loc.DESC_DesktopShortcut)"  InstallDefault="followParent" AllowAdvertise="no">
         <ComponentRef Id="MurmurDesktopShortcutComponent" />
       </Feature>
@@ -210,16 +170,11 @@
       <ComponentRef Id="NSISUninstall" />
     </Feature>
 
-    <?ifdef MergeModuleDir ?>
-    <Feature Id="VCRedist" Title="Visual C++ 10.0 Runtime" AllowAdvertise="no" Display="hidden" Level="1">
-      <MergeRef Id="VCRedist"/>
-    </Feature>
-    <?endif ?>
-
     <InstallExecuteSequence>
       <AppSearch Sequence='1' />
       <Custom Action="SetNSISPath" After="AppSearch">NSISINSTALL</Custom>
       <Custom Action='NSISUninstall' After='InstallInitialize'>NSISINSTALL AND NOT Installed</Custom>
+      <Custom Action="WixCloseApplications" Before="InstallValidate">WIX_UPGRADE_DETECTED</Custom>
     </InstallExecuteSequence>
   </Product>
 </Wix>

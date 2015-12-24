@@ -151,6 +151,21 @@ void GlobalShortcutWin::run() {
 		hhMouse = SetWindowsHookEx(WH_MOUSE_LL, HookMouse, hSelf, 0);
 	}
 
+#ifdef USE_GKEY
+	if (g.s.bEnableGKey) {
+		gkey = new GKeyLibrary();
+		qWarning("GlobalShortcutWin: GKeys initialized, isValid: %d", gkey->isValid());
+	}
+#endif
+
+#ifdef USE_XBOXINPUT
+	if (g.s.bEnableXboxInput) {
+		xboxinput = new XboxInput();
+		ZeroMemory(&xboxinputLastPacket, sizeof(xboxinputLastPacket));
+		qWarning("GlobalShortcutWin: XboxInput initialized, isValid: %d", xboxinput->isValid());
+	}
+#endif
+
 	QTimer * timer = new QTimer(this);
 	connect(timer, SIGNAL(timeout()), this, SLOT(timeTicked()));
 	timer->start(20);
@@ -158,6 +173,14 @@ void GlobalShortcutWin::run() {
 	setPriority(QThread::TimeCriticalPriority);
 
 	exec();
+
+#ifdef USE_GKEY
+	delete gkey;
+#endif
+
+#ifdef USE_XBOXINPUT
+	delete xboxinput;
+#endif
 
 	if (bHook) {
 		UnhookWindowsHookEx(hhKeyboard);
@@ -437,10 +460,59 @@ BOOL GlobalShortcutWin::EnumDevicesCB(LPCDIDEVICEINSTANCE pdidi, LPVOID pContext
 	QString sname = QString::fromUtf16(reinterpret_cast<const ushort *>(pdidi->tszInstanceName));
 
 	InputDevice *id = new InputDevice;
+
 	id->pDID = NULL;
+
 	id->name = name;
+
 	id->guid = pdidi->guidInstance;
 	id->vguid = QVariant(QUuid(id->guid).toString());
+
+	id->guidproduct = pdidi->guidProduct;
+	id->vguidproduct = QVariant(QUuid(id->guidproduct).toString());
+
+	// Check for PIDVID at the end of the GUID, as
+	// per http://stackoverflow.com/q/25622780.
+	BYTE pidvid[8] = { 0, 0, 'P', 'I', 'D', 'V', 'I', 'D' };
+	if (memcmp(id->guidproduct.Data4, pidvid, 8) == 0) {
+		uint16_t vendor_id = id->guidproduct.Data1 & 0xffff;
+		uint16_t product_id = (id->guidproduct.Data1 >> 16) & 0xffff;
+
+		id->vendor_id = vendor_id;
+		id->product_id = product_id;
+	} else {
+		id->vendor_id = 0x00;
+		id->product_id = 0x00;
+	}
+
+	// Reject devices if they are blacklisted.
+	//
+	// Device Name: ODAC-revB
+	// Vendor/Product ID: 0x262A, 0x1048
+	// https://github.com/mumble-voip/mumble/issues/1977
+	//
+	// Device Name: Aune T1 MK2 - HID-compliant consumer control device
+	// Vendor/Product ID: 0x262A, 0x1168
+	// https://github.com/mumble-voip/mumble/issues/1880
+	//
+	// For now, we simply disable the 0x262A vendor ID.
+	//
+	// 0x26A is SAVITECH Corp.
+	// http://www.savitech-ic.com/, or
+	// http://www.saviaudio.com/product.html
+	// (via https://usb-ids.gowdy.us/read/UD/262a)
+	//
+	// In the future, if there are more devices in the
+	// blacklist, we need a more structured aproach.
+	{
+		if (id->vendor_id == 0x262A) {
+			qWarning("GlobalShortcutWin: rejected blacklisted device %s (GUID: %s, PGUID: %s, VID: 0x%.4x, PID: 0x%.4x)",
+			         qPrintable(id->name), qPrintable(id->vguid.toString()), qPrintable(id->vguidproduct.toString()),
+			         id->vendor_id, id->product_id);
+			delete id;
+			return DIENUM_CONTINUE;
+		}
+	}
 
 	foreach(InputDevice *dev, cbgsw->qhInputDevices) {
 		if (dev->guid == id->guid) {
@@ -539,7 +611,20 @@ void GlobalShortcutWin::timeTicked() {
 			default:
 				break;
 		}
-		id->pDID->Poll();
+
+		{
+			QElapsedTimer timer;
+			timer.start();
+
+			id->pDID->Poll();
+
+			// If a call to Poll takes more than
+			// a second, warn the user that they
+			// might have a misbehaving device.
+			if (timer.elapsed() > 1000) {
+				qWarning("GlobalShortcut_win: Poll() for device %s took %li msec. This is abnormal, the device is possibly misbehaving...", qPrintable(QUuid(id->guid).toString()), static_cast<long>(timer.elapsed()));
+			}
+		}
 
 		hr = id->pDID->GetDeviceData(sizeof(DIDEVICEOBJECTDATA), rgdod, &dwItems, 0);
 		if (FAILED(hr))
@@ -557,6 +642,82 @@ void GlobalShortcutWin::timeTicked() {
 			handleButton(ql, rgdod[j].dwData & 0x80);
 		}
 	}
+
+#ifdef USE_GKEY
+	if (g.s.bEnableGKey && gkey->isValid()) {
+		for (int button = GKEY_MIN_MOUSE_BUTTON; button <= GKEY_MAX_MOUSE_BUTTON; button++) {
+			QList<QVariant> ql;
+			ql << button;
+			ql << GKeyLibrary::quMouse;
+			handleButton(ql, gkey->isMouseButtonPressed(button));
+		}
+		for (int mode = GKEY_MIN_KEYBOARD_MODE; mode <= GKEY_MAX_KEYBOARD_MODE; mode++) {
+			for (int key = GKEY_MIN_KEYBOARD_BUTTON; key <= GKEY_MAX_KEYBOARD_BUTTON; key++) {
+				QList<QVariant> ql;
+				// Store the key and mode in one int
+				// bit 0..15: mode, bit 16..31: key
+				ql << (key | (mode << 16));
+				ql << GKeyLibrary::quKeyboard;
+				handleButton(ql, gkey->isKeyboardGkeyPressed(key, mode));
+			}
+		}
+	}
+#endif
+
+#ifdef USE_XBOXINPUT
+	if (g.s.bEnableXboxInput && xboxinput->isValid()) {
+		XboxInputState state;
+		for (uint32_t i = 0; i < XBOXINPUT_MAX_DEVICES; i++) {
+			if (xboxinput->GetState(i, &state) == 0) {
+				// Skip the result of GetState() if the packet number hasn't changed,
+				// or if we're at the first packet.
+				if (xboxinputLastPacket[i] != 0 && state.packetNumber == xboxinputLastPacket[i]) {
+					continue;
+				}
+
+				// The buttons field of XboxInputState contains a bit
+				// for each button on the Xbox controller. The official
+				// headers enumerate the bits via XINPUT_GAMEPAD_*.
+				// The official mapping uses all 16-bits, but leaves
+				// bit 10 and 11 (counting from 0) undocumented.
+				//
+				// It turns out that bit 10 is the guide button,
+				// which can be queried using the non-public
+				// XInputGetStateEx() function.
+				//
+				// Our mapping uses the bit number as a button index.
+				// So 0x1 -> 0, 0x2 -> 1, 0x4 -> 2, and so on...
+				//
+				// However, since the buttons field is only a 16-bit value,
+				// and we also want to use the left and right triggers as
+				// buttons, we assign them the button indexes 16 and 17.
+				uint32_t buttonMask = state.buttons;
+				for (uint32_t j = 0; j < 18; j++) {
+					QList<QVariant> ql;
+
+					bool pressed = false;
+					if (j >= 16) {
+						if (j == 16) { // LeftTrigger
+							pressed = state.leftTrigger > XBOXINPUT_TRIGGER_THRESHOLD;
+						} else if (j == 17) { // RightTrigger
+							pressed = state.rightTrigger > XBOXINPUT_TRIGGER_THRESHOLD;
+						}
+					} else {
+						uint32_t currentButtonMask = (1 << j);
+						pressed = (buttonMask & currentButtonMask) != 0;
+					}
+
+					uint32_t type = (i << 24) | j;
+					ql << static_cast<uint>(type);
+					ql << XboxInput::s_XboxInputGuid;
+					handleButton(ql, pressed);
+				}
+
+				xboxinputLastPacket[i] = state.packetNumber;
+			}
+		}
+	}
+#endif
 }
 
 QString GlobalShortcutWin::buttonName(const QVariant &v) {
@@ -575,6 +736,74 @@ QString GlobalShortcutWin::buttonName(const QVariant &v) {
 
 	QString device=guid.toString();
 	QString name=QLatin1String("Unknown");
+
+#ifdef USE_GKEY
+	if (g.s.bEnableGKey && gkey->isValid()) {
+		bool isGKey = false;
+		if (guid == GKeyLibrary::quMouse) {
+			isGKey = true;
+			name = gkey->getMouseButtonString(type);
+		} else if (guid == GKeyLibrary::quKeyboard) {
+			isGKey = true;
+			name = gkey->getKeyboardGkeyString(type & 0xFFFF, type >> 16);
+		}
+		if (isGKey) {
+			device = QLatin1String("GKey:");
+			return device + name; // Example output: "Gkey:G6/M1"
+		}
+	}
+#endif
+
+#ifdef USE_XBOXINPUT
+	if (g.s.bEnableXboxInput && xboxinput->isValid() && guid == XboxInput::s_XboxInputGuid) {
+		uint32_t idx = (type >> 24) & 0xff;
+		uint32_t button = (type & 0x00ffffffff);
+
+		// Translate from our own button index mapping to
+		// the actual Xbox controller button names.
+		// For a description of the mapping, see the state
+		// querying code in GlobalShortcutWin::timeTicked().
+		switch (button) {
+			case 0:
+				return QString::fromLatin1("Xbox%1:Up").arg(idx + 1);
+			case 1:
+				return QString::fromLatin1("Xbox%1:Down").arg(idx + 1);
+			case 2:
+				return QString::fromLatin1("Xbox%1:Left").arg(idx + 1);
+			case 3:
+				return QString::fromLatin1("Xbox%1:Right").arg(idx + 1);
+			case 4:
+				return QString::fromLatin1("Xbox%1:Start").arg(idx + 1);
+			case 5:
+				return QString::fromLatin1("Xbox%1:Back").arg(idx + 1);
+			case 6:
+				return QString::fromLatin1("Xbox%1:LeftThumb").arg(idx + 1);
+			case 7:
+				return QString::fromLatin1("Xbox%1:RightThumb").arg(idx + 1);
+			case 8:
+				return QString::fromLatin1("Xbox%1:LeftShoulder").arg(idx + 1);
+			case 9:
+				return QString::fromLatin1("Xbox%1:RightShoulder").arg(idx + 1);
+			case 10:
+				return QString::fromLatin1("Xbox%1:Guide").arg(idx + 1);
+			case 11:
+				return QString::fromLatin1("Xbox%1:11").arg(idx + 1);
+			case 12:
+				return QString::fromLatin1("Xbox%1:A").arg(idx + 1);
+			case 13:
+				return QString::fromLatin1("Xbox%1:B").arg(idx + 1);
+			case 14:
+				return QString::fromLatin1("Xbox%1:X").arg(idx + 1);
+			case 15:
+				return QString::fromLatin1("Xbox%1:Y").arg(idx + 1);
+			case 16:
+				return QString::fromLatin1("Xbox%1:LeftTrigger").arg(idx + 1);
+			case 17:
+				return QString::fromLatin1("Xbox%1:RightTrigger").arg(idx + 1);
+		}
+	}
+#endif
+
 	InputDevice *id = gsw->qhInputDevices.value(guid);
 	if (guid == GUID_SysMouse)
 		device=QLatin1String("M:");

@@ -84,6 +84,9 @@ static void murmurMessageOutputQString(QtMsgType type, const QString &msg) {
 			break;
 		}
 		syslog(level, "%s", qPrintable(msg));
+		if (type == QtFatalMsg) {
+			exit(1);
+		}
 		return;
 	}
 #endif
@@ -146,18 +149,18 @@ static void murmurMessageOutputQString(QtMsgType type, const QString &msg) {
 #else
 		::MessageBoxA(NULL, qPrintable(m), "Murmur", MB_OK | MB_ICONWARNING);
 #endif
-		exit(0);
+		exit(1);
 	}
-}
-
-static void murmurMessageOutput(QtMsgType type, const char *msg) {
-	murmurMessageOutputQString(type, QString::fromUtf8(msg));
 }
 
 #if QT_VERSION >= 0x050000
 static void murmurMessageOutputWithContext(QtMsgType type, const QMessageLogContext &ctx, const QString &msg) {
 	Q_UNUSED(ctx);
 	murmurMessageOutputQString(type, msg);
+}
+#else
+static void murmurMessageOutput(QtMsgType type, const char *msg) {
+	murmurMessageOutputQString(type, QString::fromUtf8(msg));
 }
 #endif
 
@@ -405,9 +408,10 @@ int main(int argc, char **argv) {
 	}
 #endif
 
-	if (! supw.isEmpty()) {
-		if (supw.isEmpty())
+	if (!supw.isNull()) {
+		if (supw.isEmpty()) {
 			qFatal("Superuser password can not be empty");
+		}
 		ServerDB::setSUPW(sunum, supw);
 		qFatal("Superuser password set on server %d", sunum);
 	}
@@ -418,6 +422,7 @@ int main(int argc, char **argv) {
 			ServerDB::setConf(sid, "key");
 			ServerDB::setConf(sid, "certificate");
 			ServerDB::setConf(sid, "passphrase");
+			ServerDB::setConf(sid, "sslDHParams");
 		}
 	}
 

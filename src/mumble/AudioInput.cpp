@@ -144,6 +144,8 @@ AudioInput::AudioInput() : opusBuffer(g.s.iFramesPerPacket * (SAMPLE_RATE / 100)
 
 	bPreviousVoice = false;
 
+	bResetEncoder = true;
+
 	pfMicInput = pfEchoInput = pfOutput = NULL;
 
 	iBitrate = 0;
@@ -594,6 +596,8 @@ void AudioInput::resetAudioProcessor() {
 		sesEcho = NULL;
 	}
 
+	bResetEncoder = true;
+
 	bResetProcessor = false;
 }
 
@@ -675,12 +679,14 @@ bool AudioInput::selectCodec() {
 int AudioInput::encodeOpusFrame(short *source, int size, EncodingOutputBuffer& buffer) {
 	int len = 0;
 #ifdef USE_OPUS
-	if (!bPreviousVoice)
+	if (bResetEncoder) {
 		opus_encoder_ctl(opusState, OPUS_RESET_STATE, NULL);
+		bResetEncoder = false;
+	}
 
 	opus_encoder_ctl(opusState, OPUS_SET_BITRATE(iAudioQuality));
 
-	len = opus_encode(opusState, source, size, &buffer[0], buffer.size());
+	len = opus_encode(opusState, source, size, &buffer[0], static_cast<opus_int32>(buffer.size()));
 	const int tenMsFrameCount = (size / iFrameSize);
 	iBitrate = (len * 100 * 8) / tenMsFrameCount;
 #endif
@@ -692,13 +698,15 @@ int AudioInput::encodeCELTFrame(short *psSource, EncodingOutputBuffer& buffer) {
 	if (!cCodec)
 		return len;
 
-	if (!bPreviousVoice)
+	if (bResetEncoder) {
 		cCodec->celt_encoder_ctl(ceEncoder, CELT_RESET_STATE);
+		bResetEncoder = false;
+	}
 
 	cCodec->celt_encoder_ctl(ceEncoder, CELT_SET_PREDICTION(0));
 
 	cCodec->celt_encoder_ctl(ceEncoder, CELT_SET_VBR_RATE(iAudioQuality));
-	len = cCodec->encode(ceEncoder, psSource, &buffer[0], qMin<int>(iAudioQuality / (8 * 100), buffer.size()));
+	len = cCodec->encode(ceEncoder, psSource, &buffer[0], qMin<int>(iAudioQuality / (8 * 100), static_cast<int>(buffer.size())));
 	iBitrate = len * 100 * 8;
 
 	return len;
@@ -840,12 +848,16 @@ void AudioInput::encodeAudioFrame() {
 		speex_preprocess_ctl(sppPreprocess, SPEEX_PREPROCESS_SET_AGC_INCREMENT, &increment);
 	}
 
+	if (bIsSpeech && !bPreviousVoice) {
+		bResetEncoder = true;
+	}
+
 	tIdle.restart();
 
 	EncodingOutputBuffer buffer;
 	Q_ASSERT(buffer.size() >= static_cast<size_t>(iAudioQuality / 100 * iAudioFrames / 8));
 	
-	int len;
+	int len = 0;
 
 	bool encoded = true;
 	if (!selectCodec())
@@ -870,7 +882,7 @@ void AudioInput::encodeAudioFrame() {
 				// this way we are guaranteed to have a valid framecount and won't cause
 				// a codec configuration switch by suddenly using a wildly different
 				// framecount per packet.
-				const size_t missingFrames = iAudioFrames - iBufferedFrames;
+				const int missingFrames = iAudioFrames - iBufferedFrames;
 				opusBuffer.insert(opusBuffer.end(), iFrameSize * missingFrames, 0);
 				iBufferedFrames += missingFrames;
 				iFrameCounter += missingFrames;

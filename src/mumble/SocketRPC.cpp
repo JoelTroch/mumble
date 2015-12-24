@@ -111,9 +111,9 @@ void SocketRPCClient::processXml() {
 			QDomAttr attr = attributes.item(i).toAttr();
 			qmRequest.insert(attr.name(), attr.value());
 		}
-		QDomNodeList children = request.childNodes();
-		for (int i=0;i<children.count();++i) {
-			QDomElement child = children.item(i).toElement();
+		QDomNodeList childNodes = request.childNodes();
+		for (int i=0;i<childNodes.count();++i) {
+			QDomElement child = childNodes.item(i).toElement();
 			if (! child.isNull())
 				qmRequest.insert(child.nodeName(), child.text());
 		}
@@ -231,7 +231,17 @@ SocketRPC::SocketRPC(const QString &basename, QObject *p) : QObject(p) {
 #ifdef Q_OS_WIN
 	pipepath = basename;
 #else
-	pipepath = QDir::home().absoluteFilePath(QLatin1String(".") + basename + QLatin1String("Socket"));
+	{
+		QString xdgRuntimePath = QProcessEnvironment::systemEnvironment().value(QLatin1String("XDG_RUNTIME_DIR"));
+		QDir xdgRuntimeDir = QDir(xdgRuntimePath);
+
+		if (! xdgRuntimePath.isNull() && xdgRuntimeDir.exists()) {
+			pipepath = xdgRuntimeDir.absoluteFilePath(basename + QLatin1String("Socket"));
+		} else {
+			pipepath = QDir::home().absoluteFilePath(QLatin1String(".") + basename + QLatin1String("Socket"));
+		}
+	}
+
 	{
 		QFile f(pipepath);
 		if (f.exists()) {
